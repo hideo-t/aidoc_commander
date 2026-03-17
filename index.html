@@ -804,8 +804,7 @@ function go(t,el){
 window.onload=()=>{
   if(GAS){
     document.getElementById('gas-url-input').value=GAS;
-    setDot('ok','GAS接続済');
-    loadGAS();
+    testGAS();
   } else {
     loadLocal();render();
   }
