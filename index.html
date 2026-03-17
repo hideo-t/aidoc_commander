@@ -178,36 +178,13 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 .stxt{font-size:.65rem;color:var(--text3);font-family:var(--mono);margin-bottom:.4rem}
 .err{background:rgba(226,75,74,.1);border:1px solid rgba(226,75,74,.3);border-radius:var(--r);padding:7px 10px;font-size:.68rem;color:#f08080;margin-bottom:.6rem}
 .note{font-size:.65rem;color:var(--text3);line-height:1.6;margin-top:4px}
-/* GAS MODAL */
-.mbg{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:999;display:flex;align-items:center;justify-content:center}
-.modal{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);padding:1.5rem;width:min(460px,92vw)}
-.modal h2{font-size:.95rem;font-weight:500;margin-bottom:.25rem}
-.modal p{font-size:.72rem;color:var(--text2);margin-bottom:.75rem;line-height:1.7}
-.step{display:flex;gap:8px;margin-bottom:.5rem;align-items:flex-start}
-.stepn{width:18px;height:18px;border-radius:50%;background:var(--accent);color:#fff;font-size:.6rem;font-weight:600;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
-.stept{font-size:.7rem;color:var(--text2);line-height:1.6}
-.stept code{background:var(--bg3);padding:1px 4px;border-radius:3px;font-family:var(--mono);font-size:.62rem;color:var(--green)}
-.modal input{width:100%;font-size:.75rem;padding:6px 9px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none;margin:.6rem 0}
+
 @media(max-width:700px){.layout{grid-template-columns:1fr}.side{position:static;height:auto;flex-direction:row;flex-wrap:wrap;padding:.5rem}.logo,.navsec,.side-bottom{display:none}.main{padding:.75rem}.stats{grid-template-columns:repeat(2,1fr)}.kanban{grid-template-columns:repeat(3,1fr)}.prow.exp .pdetail,.rcard.exp .rdetail,.addgrid{grid-template-columns:1fr}.revgrid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 
-<!-- GAS設定モーダル -->
-<div class="mbg" id="gas-modal">
-  <div class="modal">
-    <h2>Google Spreadsheet 連携設定</h2>
-    <p>GAS Web AppのURLを設定するとデータが自動保存されます。</p>
-    <div class="step"><div class="stepn">1</div><div class="stept"><a href="https://script.google.com" target="_blank" style="color:var(--blue)">script.google.com</a> で新規プロジェクト → <code>Code_v2.gs</code> を貼り付けて保存</div></div>
-    <div class="step"><div class="stepn">2</div><div class="stept">「デプロイ」→「新しいデプロイ」→ 種類：ウェブアプリ → アクセス：<code>全員</code> → デプロイ</div></div>
-    <div class="step"><div class="stepn">3</div><div class="stept">発行されたURLを下に貼り付けて「接続する」</div></div>
-    <input type="text" id="modal-gas-url" placeholder="https://script.google.com/macros/s/xxxxx/exec">
-    <div class="btn-row">
-      <button class="btn btn-p" onclick="connectGAS()">接続する</button>
-      <button class="btn" onclick="closeModal()">あとで（ローカルのみ）</button>
-    </div>
-  </div>
-</div>
+
 
 <div class="layout">
   <!-- SIDEBAR -->
@@ -226,7 +203,11 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
     <button class="nav" onclick="go('note',this)">📝 メモ・目標</button>
     <div class="side-bottom">
       <div class="gas-row"><div class="dot" id="dot"></div><span class="gas-lbl" id="gas-lbl">未接続</span></div>
-      <button class="nav" onclick="showModal()" style="font-size:.65rem;color:var(--text3)">⚙ GAS設定</button>
+      <div style="padding:0 .4rem .4rem">
+        <div style="font-size:.58rem;color:var(--text3);margin-bottom:3px;font-family:var(--mono)">GAS URL</div>
+        <input type="text" id="gas-url-input" placeholder="https://script.google.com/..." style="width:100%;font-size:.62rem;padding:4px 6px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none;margin-bottom:4px">
+        <button onclick="connectGASSide()" style="width:100%;font-size:.65rem;padding:4px;border-radius:var(--r);border:1px solid var(--green);background:transparent;color:var(--green);cursor:pointer;margin-bottom:3px">接続する</button>
+      </div>
       <button class="nav" onclick="manualSave()" style="color:var(--green)">💾 今すぐ保存</button>
     </div>
   </aside>
@@ -336,12 +317,10 @@ async function loadSheetRepos(){
   }catch(e){}
 }
 
-function showModal(){document.getElementById('gas-modal').style.display='flex';}
-function closeModal(){document.getElementById('gas-modal').style.display='none';}
-function connectGAS(){
-  const url=document.getElementById('modal-gas-url').value.trim();
+function connectGASSide(){
+  const url=document.getElementById('gas-url-input').value.trim();
   if(!url||!url.includes('script.google.com')){alert('GAS URLを正しく入力してください');return;}
-  GAS=url;localStorage.setItem(GK,GAS);closeModal();setDot('ok','GAS接続済');
+  GAS=url;localStorage.setItem(GK,GAS);setDot('ok','GAS接続済');
   loadGAS();
 }
 
@@ -704,7 +683,7 @@ function stockCard(r){
   const pc={high:'tg-hi',mid:'tg-mid',low:'tg-lo2'};
   return`<div class="rcard${isExp?' exp':''}">
 <div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}'];render()">
-<span class="rname">${h(r.repo_name||'—')}</span>
+${r.url?`<a href="${r.url}" target="_blank" class="rname" style="text-decoration:none;color:var(--text);cursor:pointer" title="${h(r.url)}" onclick="event.stopPropagation()">${h(r.repo_name||'—')} <span style="font-size:.58rem;color:var(--text3)">↗</span></a>`:`<span class="rname">${h(r.repo_name||'—')}</span>`}
 ${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
 <span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status}</span>
 <span class="tag ${pc[r.priority]||'tg-lo2'}">${r.priority==='high'?'高':r.priority==='mid'?'中':'低'}</span>
@@ -747,11 +726,11 @@ function go(t,el){
 // ═══════════════════════════════════════════════════════════
 window.onload=()=>{
   if(GAS){
-    document.getElementById('modal-gas-url').value=GAS;
-    document.getElementById('gas-modal').style.display='none';
+    document.getElementById('gas-url-input').value=GAS;
+    setDot('ok','GAS接続済');
     loadGAS();
   } else {
-    document.getElementById('gas-modal').style.display='flex';
+    loadLocal();render();
   }
 };
 </script>
