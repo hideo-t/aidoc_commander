@@ -748,14 +748,33 @@ window.onload=()=>{
 // ══════════════════════════════════════════
 // サムネイル & モーダル機能
 // ══════════════════════════════════════════
+
+// ── サムネイルキャッシュ（localStorage・7日間） ──
+const TC_KEY = 'hideo_tc';
+const TC_TTL = 7*24*60*60*1000;
+function tcGet(){ try{return JSON.parse(localStorage.getItem(TC_KEY)||'{}');}catch(e){return {};} }
+function tcSet(c){
+  try{ localStorage.setItem(TC_KEY,JSON.stringify(c)); }
+  catch(e){
+    // 容量超過 → 古い半分を削除
+    try{
+      var ent=Object.entries(c).sort(function(a,b){return a[1].ts-b[1].ts;});
+      var h={};
+      ent.slice(Math.floor(ent.length/2)).forEach(function(x){h[x[0]]=x[1];});
+      localStorage.setItem(TC_KEY,JSON.stringify(h));
+    }catch(e2){}
+  }
+}
+
 function getLiveUrl(r){
   if(r.homepage) return r.homepage;
   var p=(r.url||'').replace('https://github.com/','').split('/');
   return (p[0]&&p[1]) ? 'https://'+p[0]+'.github.io/'+p[1]+'/' : '';
 }
+function thumbUrl(r){ return getThumbUrl(r); }
 function getThumbUrl(r){
-  var live=getLiveUrl(r);
-  return live ? 'https://image.thum.io/get/width/400/crop/280/'+live : '';
+  var base=getLiveUrl(r);
+  return base?'https://image.thum.io/get/width/400/crop/280/'+base:'';
 }
 
 // サムネイルグリッドをDOMで直接構築（文字列連結のクォート問題を完全回避）
@@ -774,16 +793,24 @@ function buildThumbGrid(items, container){
     var thumb=document.createElement('div');
     thumb.style.cssText='width:100%;height:90px;background:var(--bg3);overflow:hidden;position:relative';
     var turl=getThumbUrl(r);
+    var img=document.createElement('img');
+    img.style.cssText='width:100%;height:100%;object-fit:cover;object-position:top;display:block';
+    var noPreview=document.createElement('div');
+    noPreview.style.cssText='display:none;align-items:center;justify-content:center;height:100%;font-size:.58rem;color:var(--text3);position:absolute;inset:0';
+    noPreview.textContent=turl?'読込中...':'URLなし';
+    thumb.style.position='relative';
+    thumb.appendChild(img);
+    thumb.appendChild(noPreview);
     if(turl){
-      var img=document.createElement('img');
-      img.src=turl; img.loading='lazy';
-      img.style.cssText='width:100%;height:100%;object-fit:cover;object-position:top';
       img.onerror=function(){
-        thumb.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:.58rem;color:var(--text3)">プレビューなし</div>';
+        img.style.display='none';
+        noPreview.style.display='flex';
+        noPreview.textContent='プレビューなし';
       };
-      thumb.appendChild(img);
+      loadThumbCached(img, turl);
     } else {
-      thumb.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:.58rem;color:var(--text3)">URLなし</div>';
+      img.style.display='none';
+      noPreview.style.display='flex';
     }
     card.appendChild(thumb);
 
