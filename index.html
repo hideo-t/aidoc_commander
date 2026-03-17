@@ -276,39 +276,47 @@ let D = JSON.parse(JSON.stringify(DEF));
 // GAS & STORAGE
 // ═══════════════════════════════════════════════════════════
 function setDot(s,m){document.getElementById('dot').className='dot'+(s==='ok'?' ok':s==='err'?' err':s==='busy'?' busy':'');document.getElementById('gas-lbl').textContent=m;}
-async function gasGet(p){const r=await fetch(GAS+'?'+new URLSearchParams(p));return r.json();}
-async function gasPost(b){
-  // Content-Type:text/plain でpreflight回避 → GASのCORSリダイレクト問題を解決
-  const r = await fetch(GAS, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(b),
-    redirect: 'follow'
-  });
-  const txt = await r.text();
-  try { return JSON.parse(txt); } catch(e) { return { status:'ok' }; }
+
+// ── GAS通信 ─────────────────────────────────────────────
+async function gasGet(p){
+  const r=await fetch(GAS+'?'+new URLSearchParams(p));
+  return r.json();
+}
+// no-cors で送りっぱなし（CORSリダイレクト完全回避）
+function gasWrite(b){
+  if(!GAS)return;
+  fetch(GAS+'?'+new URLSearchParams({payload:JSON.stringify(b)}),{mode:'no-cors'}).catch(()=>{});
 }
 
+// ── 保存: localStorage主 + GAS従 ────────────────────────
 function loadLocal(){try{const r=localStorage.getItem(LS);if(r)D=JSON.parse(r);}catch(e){}}
 function saveLocal(){try{localStorage.setItem(LS,JSON.stringify(D));}catch(e){}}
-async function saveGAS(){
+
+function scheduleSave(){
   saveLocal();
-  if(!GAS)return;
-  setDot('busy','保存中...');
-  try{const r=await gasPost({key:DK,value:D});setDot(r.status==='ok'?'ok':'err',r.status==='ok'?`保存済 ${new Date().getHours()}:${String(new Date().getMinutes()).padStart(2,'0')}`:'保存失敗');}
-  catch(e){setDot('err','通信エラー');}
+  if(saveTimer)clearTimeout(saveTimer);
+  saveTimer=setTimeout(()=>{
+    if(GAS){
+      gasWrite({key:DK,value:D});
+      const t=new Date();
+      setDot('ok',`同期済 ${t.getHours()}:${String(t.getMinutes()).padStart(2,'0')}`);
+    }
+  },2000);
 }
-function scheduleSave(){if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(saveGAS,3000);}
-function manualSave(){saveGAS();}
+function manualSave(){
+  saveLocal();
+  if(GAS){gasWrite({key:DK,value:D});setDot('ok','同期リクエスト送信');}
+  else setDot('','ローカル保存済');
+}
 
 async function loadGAS(){
   if(!GAS){loadLocal();render();return;}
   setDot('busy','読込中...');
   try{
     const r=await gasGet({key:DK});
-    if(r.status==='ok'&&r.value){D=JSON.parse(r.value);setDot('ok','GAS接続済');}
-    else{loadLocal();setDot('ok','GAS接続済（新規）');}
-  }catch(e){loadLocal();setDot('err','GASエラー→ローカル');}
+    if(r.status==='ok'&&r.value){D=JSON.parse(r.value);setDot('ok','GAS読込済');}
+    else{loadLocal();setDot('ok','GAS接続済');}
+  }catch(e){loadLocal();setDot('ok','ローカルデータ使用');}
   render();
   loadSheetRepos();
 }
@@ -330,12 +338,47 @@ async function loadSheetRepos(){
 function connectGASSide(){
   const url=document.getElementById('gas-url-input').value.trim();
   if(!url||!url.includes('script.google.com')){alert('GAS URLを正しく入力してください');return;}
-  GAS=url;localStorage.setItem(GK,GAS);setDot('ok','GAS接続済');
+  GAS=url;localStorage.setItem(GK,GAS);
+  setDot('busy','接続確認中...');
   loadGAS();
 }
 
-// Auto-save every 60s
-setInterval(saveGAS,60000);
+async function pushSheet(repos){
+  if(!GAS){alert('GAS URLを設定してください');return;}
+  gasWrite({action:'add_repos',repos});
+  repos.forEach(r=>{
+    if(!sheetIds.has(String(r.id))){
+      sheetIds.add(String(r.id));
+      sheetRepos.push({
+        id:r.id,repo_name:r.name,description:r.description||'',
+        language:r.language||'',url:r.html_url||'',homepage:r.homepage||'',
+        stars:r.stargazers_count||0,size_kb:r.size||0,
+        days_since_push:r.daysSincePush||0,score:r.score||0,
+        gem_reason:r.gemReason||'',group:r.group||'未分類',
+        priority:r.priority||'mid',status:'idea',memo:r.memo||''
+      });
+    }
+  });
+  sel.clear();
+  setDot('ok','追加リクエスト送信（数秒後にSpreadsheetに反映）');
+  render();
+}
+
+async function delSheet(id){
+  if(!confirm('削除しますか？'))return;
+  if(GAS)gasWrite({action:'delete_repo',id});
+  sheetIds.delete(String(id));
+  sheetRepos=sheetRepos.filter(x=>String(x.id)!==String(id));
+  render();
+}
+
+async function updSheet(id,field,val){
+  const i=sheetRepos.findIndex(r=>String(r.id)===String(id));
+  if(i>=0)sheetRepos[i][field]=val;
+  if(GAS)gasWrite({action:'update_repo',id,[field]:val});
+}
+
+setInterval(()=>{if(GAS&&D.clients)gasWrite({key:DK,value:D});},90000);
 
 // ═══════════════════════════════════════════════════════════
 // MAPS & HELPERS
@@ -467,34 +510,7 @@ async function doFetch(){
   document.getElementById('fbtn').disabled=false;
   render();
 }
-async function pushSheet(repos){
-  if(!GAS){alert('GAS URLを設定してください');return;}
-  setDot('busy','保存中...');
-  try{
-    const r=await gasPost({action:'add_repos',repos});
-    if(r.status==='ok'){
-      repos.forEach(x=>sheetIds.add(String(x.id)));sel.clear();
-      setDot('ok',`+${r.added}件追加`);
-      await loadSheetRepos();render();
-    }else setDot('err',r.message||'追加失敗');
-  }catch(e){setDot('err','通信エラー');}
-}
-async function delSheet(id){
-  if(!GAS||!confirm('削除しますか？'))return;
-  setDot('busy','削除中...');
-  try{
-    const r=await gasPost({action:'delete_repo',id});
-    if(r.status==='ok'){sheetIds.delete(String(id));sheetRepos=sheetRepos.filter(x=>String(x.id)!==String(id));setDot('ok','削除完了');render();}
-  }catch(e){setDot('err','通信エラー');}
-}
-async function updSheet(id,field,val){
-  const i=sheetRepos.findIndex(r=>String(r.id)===String(id));
-  if(i>=0)sheetRepos[i][field]=val;
-  if(!GAS)return;
-  setDot('busy','更新中...');
-  try{const r=await gasPost({action:'update_repo',id,[field]:val});setDot(r.status==='ok'?'ok':'err',r.status==='ok'?'更新完了':'更新失敗');}
-  catch(e){setDot('err','通信エラー');}
-}
+
 function selAll(){getVisible().forEach(r=>sel.add(String(r.id)));render();}
 function clrSel(){sel.clear();render();}
 function toggleSel(id){sel.has(id)?sel.delete(id):sel.add(id);render();}
