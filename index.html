@@ -507,17 +507,44 @@ async function doFetch(){
 }
 async function pushSheet(repos){
   if(!GAS){ alert('GAS URLを設定してください'); return; }
-  // リポジトリデータは小さい単位で送信
-  setDot('busy','送信中...');
-  let added=0;
-  for(const repo of repos){
-    const r = await gasSmallWrite({action:'add_repos', repos:[repo]});
-    if(r.status==='ok'){ sheetIds.add(String(repo.id)); added+=r.added||0; }
+  setDot('busy', repos.length+'件送信中...');
+  try {
+    // 一括送信（10件ずつ分割してURL長制限を回避）
+    const chunk = 10;
+    let added = 0;
+    for(let i=0; i<repos.length; i+=chunk){
+      const batch = repos.slice(i, i+chunk);
+      const r = await gasSmallWrite({action:'add_repos', repos:batch});
+      if(r.status==='ok'){
+        added += r.added||0;
+        batch.forEach(repo => {
+          sheetIds.add(String(repo.id));
+          // ローカルにも即反映
+          if(!sheetRepos.find(x=>String(x.id)===String(repo.id))){
+            sheetRepos.push({
+              id:repo.id, repo_name:repo.name, description:repo.description||'',
+              language:repo.language||'', url:repo.html_url||'', homepage:repo.homepage||'',
+              stars:repo.stargazers_count||0, size_kb:repo.size||0,
+              days_since_push:repo.daysSincePush||0, score:repo.score||0,
+              gem_reason:repo.gemReason||'', group:repo.group||'未分類',
+              priority:repo.priority||'mid', status:'idea', memo:repo.memo||''
+            });
+          }
+        });
+      }
+    }
+    sel.clear();
+    setDot('ok', added+'件追加 → アイデアストックで確認');
+    // アイデアストックタブに自動移動
+    tab = 'ideas';
+    document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));
+    const navBtns = document.querySelectorAll('.nav');
+    navBtns.forEach(n=>{ if(n.textContent.includes('アイデア')) n.classList.add('on'); });
+    render();
+  } catch(e) {
+    setDot('err', '送信エラー: '+e.message);
+    console.error(e);
   }
-  sel.clear();
-  setDot('ok', added+'件追加完了');
-  await loadSheetRepos();
-  render();
 }
 
 async function delSheet(id){
