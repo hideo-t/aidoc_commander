@@ -838,13 +838,12 @@ function stockCard(r){
   const buf = window._scBuf[bufKey];
 
   return`<div class="rcard${isExp?' exp':''}">
-<div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}'];render()">
-  ${liveUrl
-    ?`<a href="${liveUrl}" target="_blank" class="rname" style="text-decoration:none;color:var(--text);cursor:pointer" onclick="event.stopPropagation()" title="${liveUrl}">${h(r.repo_name||'—')} <span style="font-size:.58rem;color:${r.homepage?'#5dcca5':'var(--text3)'}">${r.homepage?'🌐↗':'▶↗'}</span></a>`
-    :`<span class="rname">${h(r.repo_name||'—')}</span>`}
+<div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}'];render()" style="cursor:pointer">
+  <span class="rname">${h(r.repo_name||'—')}</span>
   ${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
   <span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status}</span>
   <span class="tag ${pc[r.priority]||'tg-lo2'}">${r.priority==='high'?'高':r.priority==='mid'?'中':'低'}</span>
+  <span style="font-size:.6rem;color:var(--text3);margin-left:auto">${isExp?'▲':'▼'}</span>
 </div>
 ${r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
 <div class="rdetail">
@@ -871,15 +870,21 @@ ${r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
   <div><div class="dlbl">メモ</div>
     <textarea onclick="event.stopPropagation()" oninput="window._scBuf['${bufKey}'].memo=this.value">${h(buf.memo)}</textarea>
   </div>
-  <div style="grid-column:span 2"><div class="btn-row">
-    ${liveUrl?`<a href="${liveUrl}" target="_blank" class="btn btn-g" onclick="event.stopPropagation()">${r.homepage?'🌐 公開ページ →':'▶ GitHub Pages →'}</a>`:''}
-    ${r.url?`<a href="${r.url}" target="_blank" class="btn" onclick="event.stopPropagation()">GitHub →</a>`:''}
-    <button class="btn" style="background:var(--green);color:#fff;border-color:var(--green)"
-      onclick="event.stopPropagation();saveStockCard('${id}')">💾 保存</button>
-    <button class="btn btn-p"
-      onclick="event.stopPropagation();promoteToProject('${id}')" title="プロジェクト一覧に追加">⬆ PJ格上げ</button>
-    <button class="btn btn-d" onclick="event.stopPropagation();delSheet('${id}')">削除</button>
-  </div></div>
+  <div style="grid-column:span 2">
+    ${liveUrl?`
+    <a href="${liveUrl}" target="_blank" onclick="event.stopPropagation()"
+      style="display:block;width:100%;text-align:center;padding:9px;margin-bottom:8px;border-radius:var(--r);background:var(--amber);color:#fff;font-size:.82rem;font-weight:500;text-decoration:none;border:none;cursor:pointer">
+      ▶ アプリを開く（${r.homepage?'公開URL':'GitHub Pages'}）
+    </a>`:'<div style="font-size:.68rem;color:var(--text3);margin-bottom:8px;padding:6px;background:var(--bg2);border-radius:var(--r);text-align:center">公開URLなし（GitHubのみ）</div>'}
+    <div class="btn-row">
+      ${r.url?`<a href="${r.url}" target="_blank" class="btn" onclick="event.stopPropagation()">GitHub コード →</a>`:''}
+      <button class="btn" style="background:var(--green);color:#fff;border-color:var(--green)"
+        onclick="event.stopPropagation();saveStockCard('${id}')">💾 保存</button>
+      <button class="btn btn-p"
+        onclick="event.stopPropagation();promoteToProject('${id}')" title="プロジェクト一覧に格上げ">⬆ PJ格上げ</button>
+      <button class="btn btn-d" onclick="event.stopPropagation();delSheet('${id}')">削除</button>
+    </div>
+  </div>
 </div></div>`;
 }
 
