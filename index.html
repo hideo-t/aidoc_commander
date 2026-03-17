@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>司令塔 — AIの町医者</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f0f0f;--bg2:#181818;--bg3:#222;--border:rgba(255,255,255,.08);--border2:rgba(255,255,255,.16);--text:#e8e6e0;--text2:#888;--text3:#555;--green:#1D9E75;--amber:#BA7517;--blue:#378ADD;--red:#E24B4A;--purple:#7F77DD;--accent:#c8502a;--sans:'Noto Sans JP',sans-serif;--mono:'DM Mono',monospace;--r:8px;--rl:12px}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--sans);font-weight:300;line-height:1.5}
+.layout{display:grid;grid-template-columns:192px 1fr;min-height:100vh}
+/* SIDEBAR */
+.side{background:var(--bg2);border-right:1px solid var(--border);padding:1rem .75rem;display:flex;flex-direction:column;gap:2px;position:sticky;top:0;height:100vh;overflow-y:auto}
+.logo{font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;color:var(--accent);padding:0 .4rem .75rem;border-bottom:1px solid var(--border);margin-bottom:.5rem}
+.logo small{color:var(--text3);font-size:.58rem;display:block;margin-top:2px}
+.nav{display:flex;align-items:center;gap:7px;padding:6px 9px;border-radius:var(--r);font-size:.75rem;color:var(--text2);cursor:pointer;border:none;background:transparent;width:100%;text-align:left;transition:all .15s}
+.nav:hover{background:var(--bg3);color:var(--text)}
+.nav.on{background:var(--bg3);color:var(--text);border-left:2px solid var(--accent)}
+.navsec{font-size:.58rem;letter-spacing:.1em;color:var(--text3);padding:.6rem .4rem .2rem;font-family:var(--mono)}
+.side-bottom{margin-top:auto;padding-top:.75rem;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:2px}
+/* GAS STATUS */
+.gas-row{display:flex;align-items:center;gap:5px;padding:5px 9px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--text3);flex-shrink:0}
+.dot.ok{background:var(--green)}.dot.err{background:var(--red)}.dot.busy{background:var(--amber);animation:blink 1s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.gas-lbl{font-size:.65rem;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* MAIN */
+.main{padding:1.25rem;overflow-x:hidden;min-width:0}
+.sec{display:none}.sec.on{display:block}
+/* HEADER */
+.phdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1rem;flex-wrap:wrap;gap:8px}
+.ptitle{font-size:1rem;font-weight:500;color:var(--text)}
+.psub{font-size:.68rem;color:var(--text2);font-family:var(--mono);margin-top:2px}
+/* STATS */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:1rem}
+.stat{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:10px 12px}
+.sv{font-size:1.25rem;font-weight:500}.sl{font-size:.65rem;color:var(--text2);margin-top:1px}.ss{font-size:.6rem;color:var(--text3);margin-top:1px}
+/* GOAL BAR */
+.gbar{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:11px 13px;margin-bottom:1rem}
+.gtop{display:flex;justify-content:space-between;font-size:.68rem;color:var(--text2);margin-bottom:5px}
+.barbg{height:7px;background:var(--bg3);border-radius:99px;overflow:hidden}
+.barfill{height:100%;background:var(--green);border-radius:99px;transition:width .5s}
+.gnote{font-size:.6rem;color:var(--text3);margin-top:4px;text-align:right;font-family:var(--mono)}
+/* CARD */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:12px 14px;margin-bottom:8px}
+.ctitle{font-size:.78rem;font-weight:500;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+/* TABLE */
+.tbl{width:100%;border-collapse:collapse;font-size:.72rem}
+.tbl th{text-align:left;font-size:.6rem;color:var(--text3);padding:4px 7px;border-bottom:1px solid var(--border);font-family:var(--mono);letter-spacing:.04em}
+.tbl td{padding:4px 7px;border-bottom:1px solid var(--border);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr:hover td{background:rgba(255,255,255,.02)}
+.tbl input,.tbl select{background:transparent;border:none;outline:none;font-size:.72rem;color:var(--text);width:100%;font-family:var(--sans)}
+.tbl input[type=number]{text-align:right}
+.tbl select{color:var(--text2);cursor:pointer}.tbl select option{background:var(--bg2)}
+/* KANBAN */
+.kanban{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-bottom:1rem}
+.kcol{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:8px;min-height:50px}
+.khead{font-size:.62rem;font-weight:500;color:var(--text3);margin-bottom:6px;display:flex;justify-content:space-between;font-family:var(--mono)}
+.kcard{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:6px 8px;margin-bottom:4px;cursor:pointer;transition:border-color .15s}
+.kcard:hover{border-color:var(--border2)}
+.kname{font-size:.72rem;font-weight:500;color:var(--text)}
+.kdate{font-size:.6rem;color:var(--text3);font-family:var(--mono);margin-top:1px}
+.kmeta{display:flex;justify-content:space-between;align-items:center;margin-top:3px}
+/* PROJECTS */
+.plist{display:flex;flex-direction:column;gap:4px}
+.prow{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;transition:border-color .15s}
+.prow:hover{border-color:var(--border2)}.prow.open{border-color:rgba(200,80,42,.4)}
+.ptop{display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer}
+.pname{font-size:.75rem;font-weight:500;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pmrr{font-size:.72rem;font-weight:500;color:var(--green);min-width:44px;text-align:right}
+.pbar-bg{height:2px;background:var(--bg3)}.pbar{height:100%}
+.pdetail{display:none;padding:9px 10px;border-top:1px solid var(--border);background:var(--bg3)}
+.prow.exp .pdetail{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.dlbl{font-size:.6rem;color:var(--text3);margin-bottom:2px;font-family:var(--mono)}
+.pdetail input,.pdetail select,.pdetail textarea{width:100%;font-size:.72rem;padding:4px 7px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg2);color:var(--text);outline:none;font-family:var(--sans)}
+.pdetail textarea{min-height:36px;resize:none}.pdetail select option{background:var(--bg2)}
+/* FILTER BAR */
+.fbar{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:.5rem;align-items:center}
+.fbar input{flex:1;min-width:100px;font-size:.72rem;padding:4px 8px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none}
+.chip{font-size:.65rem;padding:3px 9px;border-radius:99px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;white-space:nowrap;transition:all .15s}
+.chip:hover{border-color:var(--border2);color:var(--text)}.chip.on{background:var(--text);color:var(--bg);border-color:var(--text)}
+/* TAGS */
+.tag{font-size:.6rem;padding:2px 5px;border-radius:99px;font-weight:500;white-space:nowrap}
+.tg-u{background:rgba(55,138,221,.15);color:#7bc0ff}
+.tg-gh{background:rgba(29,158,117,.15);color:#5dcca5}
+.tg-lo{background:rgba(186,117,23,.15);color:#e8a840}
+.tg-sub{background:rgba(29,158,117,.2);color:#5dcca5}
+.tg-once{background:rgba(200,80,42,.15);color:#e8845a}
+.tg-free{background:rgba(255,255,255,.06);color:var(--text3)}
+.tg-act{background:rgba(29,158,117,.2);color:#5dcca5}
+.tg-wip{background:rgba(186,117,23,.2);color:#e8a840}
+.tg-idea{background:rgba(127,119,221,.2);color:#b5b0f0}
+.tg-arch{background:rgba(255,255,255,.06);color:var(--text3)}
+.tg-gem{background:rgba(186,117,23,.2);color:#e8a840}
+.tg-lang{background:rgba(255,255,255,.06);color:var(--text2)}
+.tg-hi{background:rgba(226,75,74,.15);color:#f08080}
+.tg-mid{background:rgba(186,117,23,.15);color:#e8a840}
+.tg-lo2{background:rgba(255,255,255,.06);color:var(--text3)}
+.tg-added{background:rgba(29,158,117,.2);color:#5dcca5}
+/* BTNS */
+.btn{font-size:.68rem;padding:5px 12px;border-radius:var(--r);border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;transition:all .15s;font-family:var(--sans)}
+.btn:hover{background:var(--bg3);color:var(--text);border-color:var(--border2)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-p{background:var(--accent);border-color:var(--accent);color:#fff}.btn-p:hover{opacity:.85}
+.btn-g{background:var(--green);border-color:var(--green);color:#fff}.btn-g:hover{opacity:.85}
+.btn-d{color:var(--red)}.btn-d:hover{background:rgba(226,75,74,.1);border-color:var(--red)}
+.btn-row{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+/* INPUT ROW */
+.irow{display:flex;gap:8px;margin-bottom:.75rem;align-items:flex-end;flex-wrap:wrap}
+.fld{display:flex;flex-direction:column;gap:3px;flex:1;min-width:120px}
+.flbl{font-size:.62rem;color:var(--text3)}
+.irow input[type=text],.irow input[type=password]{width:100%;font-size:.75rem;padding:5px 9px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none;transition:border-color .15s}
+.irow input:focus{border-color:var(--border2)}
+/* ADD FORM */
+.addform{background:var(--bg3);border:1px solid var(--border);border-radius:var(--rl);padding:10px;margin-bottom:8px}
+.addgrid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.addform input,.addform select{width:100%;font-size:.72rem;padding:4px 7px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg2);color:var(--text);outline:none;font-family:var(--sans)}
+.addform select option{background:var(--bg2)}
+/* MRR */
+.mrow{display:flex;align-items:center;gap:7px;margin-bottom:5px}
+.mlbl{font-size:.65rem;color:var(--text2);min-width:36px;font-family:var(--mono)}
+.mbg{flex:1;height:14px;background:var(--bg3);border-radius:3px;overflow:hidden}
+.mbar{height:100%;border-radius:3px;transition:width .5s}
+.minput{font-size:.65rem;background:transparent;border:none;outline:none;color:var(--text);width:42px;text-align:right;font-family:var(--mono)}
+/* REVENUE */
+.revgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:1rem}
+.revcrd{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:12px}
+.revval{font-size:1.25rem;font-weight:500;color:var(--green);margin:3px 0 7px}
+.revitem{display:flex;justify-content:space-between;font-size:.65rem;padding:3px 0;border-bottom:1px solid var(--border);color:var(--text2)}
+.revitem:last-child{border-bottom:none}
+/* IDEAS */
+.idearow{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:7px 9px;display:flex;align-items:center;gap:7px;margin-bottom:4px}
+.ideatxt input{background:transparent;border:none;outline:none;font-size:.75rem;color:var(--text);flex:1;width:100%}
+.idearow select{background:transparent;border:none;outline:none;font-size:.65rem;color:var(--text2);cursor:pointer}
+.idearow select option{background:var(--bg2)}
+/* NOTE */
+.notearea{background:var(--bg3);border:1px solid var(--border);border-radius:var(--rl);padding:11px 13px}
+.notearea textarea{width:100%;background:transparent;border:none;outline:none;font-size:.75rem;color:var(--text);line-height:1.8;resize:none;min-height:100px;font-family:var(--sans)}
+/* PROGRESS */
+.progwrap{margin-bottom:.75rem;display:none}
+.progtxt{font-size:.65rem;color:var(--text2);margin-bottom:3px;font-family:var(--mono)}
+.progbg{height:4px;background:var(--bg3);border-radius:99px;overflow:hidden}
+.progfill{height:100%;background:var(--blue);border-radius:99px;transition:width .3s}
+/* REPO CARDS */
+.rlist{display:flex;flex-direction:column;gap:4px}
+.rcard{background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;transition:border-color .15s}
+.rcard:hover{border-color:var(--border2)}.rcard.gem{border-color:rgba(186,117,23,.5)}.rcard.rsel{border-color:rgba(55,138,221,.6);background:rgba(55,138,221,.04)}
+.rtop{display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer;user-select:none}
+.rchk{width:14px;height:14px;border-radius:3px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:9px;cursor:pointer}
+.rcard.rsel .rchk{background:var(--blue);border-color:var(--blue);color:#fff}
+.rname{font-size:.75rem;font-weight:500;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rmeta{font-size:.6rem;color:var(--text3);font-family:var(--mono);white-space:nowrap}
+.rpbar-bg{height:2px;background:var(--bg3)}.rpbar{height:100%}
+.rdesc{padding:0 10px 5px;font-size:.68rem;color:var(--text2);line-height:1.5}
+.rdetail{display:none;padding:9px 10px;border-top:1px solid var(--border);background:var(--bg3)}
+.rcard.exp .rdetail{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.rdetail input,.rdetail select,.rdetail textarea{width:100%;font-size:.7rem;padding:4px 7px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg2);color:var(--text);outline:none;font-family:var(--sans)}
+.rdetail textarea{min-height:36px;resize:none}.rdetail select option{background:var(--bg2)}
+/* SELECT BAR */
+.selbar{display:none;gap:6px;align-items:center;padding:7px 11px;background:rgba(55,138,221,.1);border:1px solid rgba(55,138,221,.3);border-radius:var(--r);margin-bottom:.5rem;flex-wrap:wrap}
+.selbar.show{display:flex}
+.selcnt{font-size:.75rem;font-weight:500;color:var(--blue)}
+.selbar select{font-size:.68rem;padding:4px 7px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none}
+.selbar select option{background:var(--bg2)}
+/* GROUPS */
+.grpwrap{margin-bottom:.5rem}
+.grphead{display:flex;align-items:center;justify-content:space-between;padding:7px 11px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);cursor:pointer;margin-bottom:3px;transition:border-color .15s}
+.grphead:hover{border-color:var(--border2)}
+.grpname{font-size:.75rem;font-weight:500;color:var(--text)}
+.grpmeta{display:flex;gap:5px;align-items:center}
+.grpbody{padding:0 3px}
+.addgrp{display:flex;gap:6px;margin-bottom:.75rem;align-items:center}
+.addgrp input{font-size:.75rem;padding:5px 9px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none;flex:1}
+/* STXT */
+.stxt{font-size:.65rem;color:var(--text3);font-family:var(--mono);margin-bottom:.4rem}
+.err{background:rgba(226,75,74,.1);border:1px solid rgba(226,75,74,.3);border-radius:var(--r);padding:7px 10px;font-size:.68rem;color:#f08080;margin-bottom:.6rem}
+.note{font-size:.65rem;color:var(--text3);line-height:1.6;margin-top:4px}
+/* GAS MODAL */
+.mbg{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:999;display:flex;align-items:center;justify-content:center}
+.modal{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rl);padding:1.5rem;width:min(460px,92vw)}
+.modal h2{font-size:.95rem;font-weight:500;margin-bottom:.25rem}
+.modal p{font-size:.72rem;color:var(--text2);margin-bottom:.75rem;line-height:1.7}
+.step{display:flex;gap:8px;margin-bottom:.5rem;align-items:flex-start}
+.stepn{width:18px;height:18px;border-radius:50%;background:var(--accent);color:#fff;font-size:.6rem;font-weight:600;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.stept{font-size:.7rem;color:var(--text2);line-height:1.6}
+.stept code{background:var(--bg3);padding:1px 4px;border-radius:3px;font-family:var(--mono);font-size:.62rem;color:var(--green)}
+.modal input{width:100%;font-size:.75rem;padding:6px 9px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none;margin:.6rem 0}
+@media(max-width:700px){.layout{grid-template-columns:1fr}.side{position:static;height:auto;flex-direction:row;flex-wrap:wrap;padding:.5rem}.logo,.navsec,.side-bottom{display:none}.main{padding:.75rem}.stats{grid-template-columns:repeat(2,1fr)}.kanban{grid-template-columns:repeat(3,1fr)}.prow.exp .pdetail,.rcard.exp .rdetail,.addgrid{grid-template-columns:1fr}.revgrid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<!-- GAS設定モーダル -->
+<div class="mbg" id="gas-modal">
+  <div class="modal">
+    <h2>Google Spreadsheet 連携設定</h2>
+    <p>GAS Web AppのURLを設定するとデータが自動保存されます。</p>
+    <div class="step"><div class="stepn">1</div><div class="stept"><a href="https://script.google.com" target="_blank" style="color:var(--blue)">script.google.com</a> で新規プロジェクト → <code>Code_v2.gs</code> を貼り付けて保存</div></div>
+    <div class="step"><div class="stepn">2</div><div class="stept">「デプロイ」→「新しいデプロイ」→ 種類：ウェブアプリ → アクセス：<code>全員</code> → デプロイ</div></div>
+    <div class="step"><div class="stepn">3</div><div class="stept">発行されたURLを下に貼り付けて「接続する」</div></div>
+    <input type="text" id="modal-gas-url" placeholder="https://script.google.com/macros/s/xxxxx/exec">
+    <div class="btn-row">
+      <button class="btn btn-p" onclick="connectGAS()">接続する</button>
+      <button class="btn" onclick="closeModal()">あとで（ローカルのみ）</button>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- SIDEBAR -->
+  <aside class="side">
+    <div class="logo">AIの町医者<small>司令塔 v3.0</small></div>
+    <div class="navsec">OVERVIEW</div>
+    <button class="nav on" onclick="go('overview',this)">⚡ ダッシュボード</button>
+    <button class="nav" onclick="go('pipeline',this)">🎯 商談パイプライン</button>
+    <div class="navsec">PROJECTS</div>
+    <button class="nav" onclick="go('projects',this)">📁 プロジェクト</button>
+    <button class="nav" onclick="go('revenue',this)">💰 収益管理</button>
+    <div class="navsec">IDEAS</div>
+    <button class="nav" onclick="go('github',this)">🔍 GitHub発掘</button>
+    <button class="nav" onclick="go('ideas',this)">💡 アイデアストック</button>
+    <div class="navsec">TOOLS</div>
+    <button class="nav" onclick="go('note',this)">📝 メモ・目標</button>
+    <div class="side-bottom">
+      <div class="gas-row"><div class="dot" id="dot"></div><span class="gas-lbl" id="gas-lbl">未接続</span></div>
+      <button class="nav" onclick="showModal()" style="font-size:.65rem;color:var(--text3)">⚙ GAS設定</button>
+      <button class="nav" onclick="manualSave()" style="color:var(--green)">💾 今すぐ保存</button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main" id="main"></main>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════
+const LS  = 'hideo_os_v4';
+const GK  = 'hideo_gas_url';
+const DK  = 'hideo_os_main';
+
+let GAS   = localStorage.getItem(GK) || '';
+let tab   = 'overview';
+let expP  = {}; // project expand
+let expR  = {}; // repo expand
+let expG  = {}; // group expand
+let showAdd = false;
+let sel   = new Set();
+let addForm = {name:'',gh:'',user:'self',idea:'self',stock:'github',rev:'free',revAmt:0,status:'wip',client:'',memo:''};
+let fP = {search:'',user:'',rev:'',status:''};   // project filter
+let rFilter = 'gem'; let rSearch = '';
+let sFilter = 'all'; let sSearch = '';
+let fetched = []; let sheetRepos = []; let sheetIds = new Set();
+let groups = ['未分類','AI・Bot','収益化候補','横展開可能','顧客向け','個人プロジェクト','アーカイブ'];
+let saveTimer = null;
+
+const DEF = {
+  pipeline:[
+    {id:1,name:'岡田 康平',stage:'zoom',date:'3/24 16:30',fee:10,memo:'Calendly自動予約'},
+    {id:2,name:'藤田 雄伍',stage:'zoom',date:'調整中',fee:10,memo:'1時間希望'},
+    {id:3,name:'平井 彪雅',stage:'zoom',date:'調整中',fee:10,memo:''},
+    {id:4,name:'浦澤 真柿',stage:'zoom',date:'調整中',fee:10,memo:''},
+    {id:5,name:'宇都 大誠',stage:'zoom',date:'調整中',fee:10,memo:''},
+    {id:6,name:'石橋 翔大',stage:'lead',date:'',fee:10,memo:'AIの町医者に言及'},
+    {id:7,name:'農業クライアント',stage:'proposal',date:'3/19面談済',fee:10,memo:''},
+  ],
+  clients:[{id:1,name:'坂田社長（Park Homes Okinawa）',type:'トレーラーハウス',fee:20,since:'2025-01',memo:'成果連動別'}],
+  mrr:[{m:'1月',v:0},{m:'2月',v:0},{m:'3月',v:20}],
+  projects:[
+    {id:1,name:'Park Homes Okinawa',gh:'hideo-t/phoka',user:'existing',idea:'client',stock:'github',rev:'sub',revAmt:200000,status:'active',progress:85,client:'坂田社長',memo:'FAQチャット・AI見積もり'},
+    {id:2,name:'願い灯 / tesou3_v12',gh:'tesou3_v12',user:'direct',idea:'self',stock:'local',rev:'sub',revAmt:0,status:'active',progress:70,client:'那須HP',memo:'FC30店舗目標'},
+    {id:3,name:'AIの町医者サイト',gh:'hideo-t/aidoctor',user:'line',idea:'self',stock:'github',rev:'free',revAmt:0,status:'active',progress:92,client:'',memo:'集客用LP'},
+    {id:4,name:'World Kings Japan',gh:'hideo-t/worldkingjapan',user:'line',idea:'self',stock:'github',rev:'free',revAmt:0,status:'active',progress:60,client:'',memo:'235話・多言語'},
+    {id:5,name:'もしも日本',gh:'MistyJapan',user:'line',idea:'self',stock:'github',rev:'once',revAmt:0,status:'wip',progress:30,client:'',memo:'楽天アフィリ'},
+    {id:6,name:'PAPA / PrivateLLM',gh:'privatellm.jp',user:'direct',idea:'self',stock:'both',rev:'sub',revAmt:0,status:'wip',progress:50,client:'',memo:'認定3レベル'},
+    {id:7,name:'うちの子からのメッセージ',gh:'',user:'direct',idea:'self',stock:'local',rev:'sub',revAmt:0,status:'wip',progress:45,client:'那須HP',memo:'東京HQ提案中'},
+    {id:8,name:'業界別チャットボット工場',gh:'',user:'line',idea:'self',stock:'local',rev:'sub',revAmt:0,status:'idea',progress:5,client:'',memo:'テンプレ→即デプロイ'},
+  ],
+  ideas:[
+    {id:1,text:'農業×AIチャットボット（3/19面談から）',src:'client',priority:'high'},
+    {id:2,text:'note記事「AIの町医者が農業を診察してみた」',src:'self',priority:'high'},
+    {id:3,text:'Googleビジネスプロフィール週1投稿',src:'self',priority:'mid'},
+  ],
+  goals:{clients:25,mrr:500},
+  note:'3/17 今日の達成:\n✅ Calendly完全自動化\n✅ サイト公開\n✅ 司令塔v3起動\n\n次のアクション:\n→ 3/24 岡田Zoom\n→ 農業クライアント提案書\n→ GitHub発掘',
+  nextId:50
+};
+let D = JSON.parse(JSON.stringify(DEF));
+
+// ═══════════════════════════════════════════════════════════
+// GAS & STORAGE
+// ═══════════════════════════════════════════════════════════
+function setDot(s,m){document.getElementById('dot').className='dot'+(s==='ok'?' ok':s==='err'?' err':s==='busy'?' busy':'');document.getElementById('gas-lbl').textContent=m;}
+async function gasGet(p){const r=await fetch(GAS+'?'+new URLSearchParams(p));return r.json();}
+async function gasPost(b){const r=await fetch(GAS,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});return r.json();}
+
+function loadLocal(){try{const r=localStorage.getItem(LS);if(r)D=JSON.parse(r);}catch(e){}}
+function saveLocal(){try{localStorage.setItem(LS,JSON.stringify(D));}catch(e){}}
+async function saveGAS(){
+  saveLocal();
+  if(!GAS)return;
+  setDot('busy','保存中...');
+  try{const r=await gasPost({key:DK,value:D});setDot(r.status==='ok'?'ok':'err',r.status==='ok'?`保存済 ${new Date().getHours()}:${String(new Date().getMinutes()).padStart(2,'0')}`:'保存失敗');}
+  catch(e){setDot('err','通信エラー');}
+}
+function scheduleSave(){if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(saveGAS,3000);}
+function manualSave(){saveGAS();}
+
+async function loadGAS(){
+  if(!GAS){loadLocal();render();return;}
+  setDot('busy','読込中...');
+  try{
+    const r=await gasGet({key:DK});
+    if(r.status==='ok'&&r.value){D=JSON.parse(r.value);setDot('ok','GAS接続済');}
+    else{loadLocal();setDot('ok','GAS接続済（新規）');}
+  }catch(e){loadLocal();setDot('err','GASエラー→ローカル');}
+  render();
+  loadSheetRepos();
+}
+
+async function loadSheetRepos(){
+  if(!GAS)return;
+  try{
+    const r=await gasGet({action:'get_repos'});
+    if(r.status==='ok'){
+      sheetRepos=r.repos||[];
+      sheetIds=new Set(sheetRepos.map(x=>String(x.id)));
+      const eg=[...new Set(sheetRepos.map(x=>x.group).filter(Boolean))];
+      eg.forEach(g=>{if(!groups.includes(g))groups.push(g);});
+      if(tab==='ideas'||tab==='github')render();
+    }
+  }catch(e){}
+}
+
+function showModal(){document.getElementById('gas-modal').style.display='flex';}
+function closeModal(){document.getElementById('gas-modal').style.display='none';}
+function connectGAS(){
+  const url=document.getElementById('modal-gas-url').value.trim();
+  if(!url||!url.includes('script.google.com')){alert('GAS URLを正しく入力してください');return;}
+  GAS=url;localStorage.setItem(GK,GAS);closeModal();setDot('ok','GAS接続済');
+  loadGAS();
+}
+
+// Auto-save every 60s
+setInterval(saveGAS,60000);
+
+// ═══════════════════════════════════════════════════════════
+// MAPS & HELPERS
+// ═══════════════════════════════════════════════════════════
+const UM={existing:'既存紹介',line:'LINE/ネット',direct:'直接',self:'自分'};
+const IM={self:'自発',client:'顧客発'};
+const SM={github:'GitHub',local:'ローカル',both:'両方'};
+const RM={sub:'サブスク',once:'1回型',free:'無収益'};
+const STM={active:'稼働中',wip:'開発中',idea:'アイデア',archive:'アーカイブ'};
+const STCOL={active:'tg-act',wip:'tg-wip',idea:'tg-idea',archive:'tg-arch'};
+const RCOL={sub:'tg-sub',once:'tg-once',free:'tg-free'};
+const STAGES={lead:'リード',approach:'アプローチ',zoom:'Zoom予定',proposal:'提案中',won:'成約'};
+const SK=Object.keys(STAGES);
+const delay=ms=>new Promise(r=>setTimeout(r,ms));
+
+function calcMRR(){return D.clients.reduce((s,c)=>s+(c.fee||0),0);}
+function calcCR(){const w=D.pipeline.filter(p=>p.stage==='won').length,t=D.pipeline.filter(p=>['zoom','proposal','won'].includes(p.stage)).length;return t>0?Math.round(w/t*100):null;}
+function pct(){return Math.min(100,Math.round(D.clients.length/D.goals.clients*100));}
+function tago(d){if(d<1)return'今日';if(d<7)return d+'日前';if(d<30)return Math.round(d/7)+'週前';if(d<365)return Math.round(d/30)+'ヶ月前';return Math.round(d/365)+'年前';}
+function h(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function tagP(p){return[
+  `<span class="tag tg-u">${UM[p.user]||p.user}</span>`,
+  `<span class="tag ${p.stock==='github'?'tg-gh':p.stock==='local'?'tg-lo':'tg-gh'}">${SM[p.stock]||p.stock}</span>`,
+  `<span class="tag ${RCOL[p.rev]||'tg-free'}">${RM[p.rev]||p.rev}</span>`,
+  `<span class="tag ${STCOL[p.status]||'tg-arch'}">${STM[p.status]||p.status}</span>`,
+].join('');}
+
+function fProjects(){
+  return D.projects.filter(p=>{
+    if(fP.search){const q=fP.search.toLowerCase();if(!p.name.toLowerCase().includes(q)&&!p.memo.toLowerCase().includes(q)&&!(p.client||'').toLowerCase().includes(q))return false;}
+    if(fP.user&&p.user!==fP.user)return false;
+    if(fP.rev&&p.rev!==fP.rev)return false;
+    if(fP.status&&p.status!==fP.status)return false;
+    return true;
+  });
+}
+function getVisible(){
+  let list=fetched.filter(r=>!r.fork);
+  if(rFilter==='gem')list=list.filter(r=>r.isGem);
+  if(rFilter==='bur')list=list.filter(r=>r.daysSincePush>=180&&r.daysSincePush<730&&r.size>30);
+  if(rFilter==='new')list=list.filter(r=>!sheetIds.has(String(r.id)));
+  if(rSearch){const q=rSearch.toLowerCase();list=list.filter(r=>r.name.toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q));}
+  return list;
+}
+
+// ═══════════════════════════════════════════════════════════
+// ACTIONS
+// ═══════════════════════════════════════════════════════════
+function updP(id,k,v){const i=D.projects.findIndex(p=>p.id===id);if(i>=0)D.projects[i][k]=v;scheduleSave();}
+function remP(id){D.projects=D.projects.filter(p=>p.id!==id);delete expP[id];scheduleSave();render();}
+function addProject(){
+  if(!addForm.name.trim())return;
+  D.projects.unshift({...addForm,id:++D.nextId,progress:0});
+  addForm={name:'',gh:'',user:'self',idea:'self',stock:'github',rev:'free',revAmt:0,status:'wip',client:'',memo:''};
+  showAdd=false;scheduleSave();render();
+}
+function addMo(){
+  const ms=['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+  const last=D.mrr[D.mrr.length-1];const idx=last?ms.indexOf(last.m):-1;
+  D.mrr.push({m:ms[(idx+1)%12],v:0});scheduleSave();render();
+}
+function advance(id){
+  const i=D.pipeline.findIndex(p=>p.id===id);if(i<0)return;
+  const p=D.pipeline[i],next=SK[(SK.indexOf(p.stage)+1)%SK.length];
+  if(confirm(`「${p.name}」を「${STAGES[next]}」に進めますか？`)){
+    D.pipeline[i].stage=next;
+    if(next==='won'){
+      D.clients.push({id:++D.nextId,name:p.name,type:'',fee:p.fee,since:new Date().toISOString().slice(0,7),memo:''});
+      if(D.mrr.length)D.mrr[D.mrr.length-1].v=(D.mrr[D.mrr.length-1].v||0)+p.fee;
+    }
+    scheduleSave();render();
+  }
+}
+function ideaToPJ(i){
+  const idea=D.ideas[i];
+  D.projects.unshift({id:++D.nextId,name:idea.text,gh:'',user:'self',idea:idea.src,stock:'github',rev:'free',revAmt:0,status:'idea',progress:0,client:'',memo:'アイデアから昇格'});
+  D.ideas.splice(i,1);tab='projects';scheduleSave();render();
+}
+
+// GitHub
+function scoreR(r){
+  const days=(Date.now()-new Date(r.pushed_at))/86400000;
+  let sc=0,isGem=false,reason='';
+  if(r.stargazers_count>0)sc+=r.stargazers_count*5;
+  if(r.forks_count>0)sc+=r.forks_count*3;
+  if(days>30&&days<365)sc+=20;if(days<30)sc+=10;
+  if(r.description)sc+=15;if(r.homepage)sc+=20;
+  if(r.topics?.length)sc+=r.topics.length*5;
+  const n=(r.name+' '+(r.description||'')).toLowerCase();
+  const biz=['ai','bot','chat','api','app','tool','system','dashboard','line','webhook','自動','診断','予約','管理'];
+  const hits=biz.filter(k=>n.includes(k));if(hits.length)sc+=hits.length*8;
+  const rev=['stripe','payment','subscription','saas'];
+  if(rev.some(k=>n.includes(k))){sc+=30;isGem=true;reason='収益化シグナル';}
+  const tmpl=['template','boilerplate','starter','generator'];
+  if(tmpl.some(k=>n.includes(k))){sc+=25;isGem=true;reason=reason||'横展開可能';}
+  if(r.size>100)sc+=10;if(r.size>1000)sc+=15;if(r.fork)sc-=20;
+  if(!r.fork&&days>180&&days<730&&r.size>50){isGem=true;reason=reason||'実装済み長期放置';}
+  return{...r,score:Math.max(0,sc),isGem,gemReason:reason,daysSincePush:Math.round(days),group:'未分類',priority:'mid',status:'idea',memo:''};
+}
+async function doFetch(){
+  const user=document.getElementById('ghu').value.trim();
+  const token=document.getElementById('ght').value.trim();
+  if(!user)return;
+  document.getElementById('fbtn').disabled=true;
+  document.getElementById('fprog').style.display='block';
+  document.getElementById('ferr').innerHTML='';
+  fetched=[];sel.clear();
+  const hd={Accept:'application/vnd.github.v3+json'};
+  if(token)hd.Authorization='Bearer '+token;
+  try{
+    let page=1;
+    while(true){
+      document.getElementById('ptxt').textContent=`取得中... ${fetched.length}件`;
+      document.getElementById('pfill').style.width=Math.min(55,fetched.length/3)+'%';
+      const r=await fetch(`https://api.github.com/users/${user}/repos?per_page=100&sort=pushed&page=${page}`,{headers:hd});
+      if(!r.ok)throw new Error(`GitHub API ${r.status}: ${r.statusText}`);
+      const d=await r.json();if(!d.length)break;
+      fetched=fetched.concat(d.map(scoreR));if(d.length<100)break;page++;
+    }
+    fetched.sort((a,b)=>b.score-a.score);
+    document.getElementById('ptxt').textContent='分析完了！';
+    document.getElementById('pfill').style.width='100%';
+    await delay(300);
+    document.getElementById('fprog').style.display='none';
+  }catch(e){
+    document.getElementById('ferr').innerHTML=`<div class="err">${e.message}</div>`;
+    document.getElementById('fprog').style.display='none';
+  }
+  document.getElementById('fbtn').disabled=false;
+  render();
+}
+async function pushSheet(repos){
+  if(!GAS){alert('GAS URLを設定してください');return;}
+  setDot('busy','保存中...');
+  try{
+    const r=await gasPost({action:'add_repos',repos});
+    if(r.status==='ok'){
+      repos.forEach(x=>sheetIds.add(String(x.id)));sel.clear();
+      setDot('ok',`+${r.added}件追加`);
+      await loadSheetRepos();render();
+    }else setDot('err',r.message||'追加失敗');
+  }catch(e){setDot('err','通信エラー');}
+}
+async function delSheet(id){
+  if(!GAS||!confirm('削除しますか？'))return;
+  setDot('busy','削除中...');
+  try{
+    const r=await gasPost({action:'delete_repo',id});
+    if(r.status==='ok'){sheetIds.delete(String(id));sheetRepos=sheetRepos.filter(x=>String(x.id)!==String(id));setDot('ok','削除完了');render();}
+  }catch(e){setDot('err','通信エラー');}
+}
+async function updSheet(id,field,val){
+  const i=sheetRepos.findIndex(r=>String(r.id)===String(id));
+  if(i>=0)sheetRepos[i][field]=val;
+  if(!GAS)return;
+  setDot('busy','更新中...');
+  try{const r=await gasPost({action:'update_repo',id,[field]:val});setDot(r.status==='ok'?'ok':'err',r.status==='ok'?'更新完了':'更新失敗');}
+  catch(e){setDot('err','通信エラー');}
+}
+function selAll(){getVisible().forEach(r=>sel.add(String(r.id)));render();}
+function clrSel(){sel.clear();render();}
+function toggleSel(id){sel.has(id)?sel.delete(id):sel.add(id);render();}
+function addGrp(){const n=document.getElementById('ngrp').value.trim();if(!n||groups.includes(n))return;groups.push(n);document.getElementById('ngrp').value='';render();}
+
+// ═══════════════════════════════════════════════════════════
+// RENDERERS
+// ═══════════════════════════════════════════════════════════
+function rOverview(){
+  const mrr=calcMRR(),cr=calcCR(),p=pct();
+  const pot=D.pipeline.filter(x=>x.stage!=='won').reduce((s,x)=>s+(x.fee||0),0);
+  const gap={c:Math.max(0,D.goals.clients-D.clients.length),m:Math.max(0,D.goals.mrr-mrr)};
+  const maxV=Math.max(...D.mrr.map(m=>m.v),mrr,1);
+  return`<div class="phdr"><div><div class="ptitle">ダッシュボード</div><div class="psub">AIの町医者 独立目標管理</div></div></div>
+<div class="stats">
+  <div class="stat"><div class="sv" style="color:var(--green)">${D.clients.length}件</div><div class="sl">確定クライアント</div><div class="ss">目標${D.goals.clients}件</div></div>
+  <div class="stat"><div class="sv" style="color:var(--green)">${mrr}万</div><div class="sl">確定MRR</div><div class="ss">目標${D.goals.mrr}万円</div></div>
+  <div class="stat"><div class="sv" style="color:${cr!==null?'var(--amber)':'var(--text3)'}">${cr!==null?cr+'%':'未計測'}</div><div class="sl">Zoom成約率</div><div class="ss">${D.pipeline.length}件進行中</div></div>
+  <div class="stat"><div class="sv" style="color:var(--blue)">${pot}万</div><div class="sl">潜在パイプラインMRR</div><div class="ss">${D.pipeline.filter(p=>p.stage!=='won').length}件</div></div>
+</div>
+<div class="gbar">
+  <div class="gtop"><span>達成度 ${D.clients.length}/${D.goals.clients}件 (${p}%)</span><span>MRR ${mrr}/${D.goals.mrr}万</span></div>
+  <div class="barbg"><div class="barfill" style="width:${p}%"></div></div>
+  <div class="gnote">あと${gap.c}件・¥${gap.m}万 ${cr?'— '+Math.ceil(gap.c/Math.max(20*0.5*cr/100,.1))+'ヶ月予測':'— 成約率データ待ち'}</div>
+</div>
+<div class="card"><div class="ctitle">月次MRR推移</div>
+${D.mrr.map((m,i)=>`<div class="mrow"><div class="mlbl">${m.m}</div><div class="mbg"><div class="mbar" style="width:${Math.round(m.v/maxV*100)}%;background:${i===D.mrr.length-1?'var(--green)':'rgba(255,255,255,.15)'}"></div></div><input class="minput" type="number" value="${m.v}" oninput="D.mrr[${i}].v=parseFloat(this.value)||0;scheduleSave()">万<button class="btn btn-d" style="padding:1px 5px" onclick="D.mrr.splice(${i},1);scheduleSave();render()">✕</button></div>`).join('')}
+<button class="btn" style="margin-top:5px;font-size:.65rem" onclick="addMo()">+ 月追加</button></div>
+<div class="card"><div class="ctitle">確定クライアント</div>
+<table class="tbl"><thead><tr><th>名前</th><th>業種</th><th style="text-align:right">月額(万)</th><th>開始</th><th>メモ</th><th></th></tr></thead><tbody>
+${D.clients.map((c,i)=>`<tr><td><input value="${h(c.name)}" oninput="D.clients[${i}].name=this.value;scheduleSave()"></td><td><input value="${h(c.type||'')}" oninput="D.clients[${i}].type=this.value"></td><td><input type="number" value="${c.fee||0}" oninput="D.clients[${i}].fee=parseFloat(this.value)||0;scheduleSave()" style="width:55px;text-align:right"></td><td><input value="${h(c.since||'')}" oninput="D.clients[${i}].since=this.value" style="width:65px" placeholder="yyyy-mm"></td><td><input value="${h(c.memo||'')}" oninput="D.clients[${i}].memo=this.value"></td><td><button class="btn btn-d" style="padding:1px 5px" onclick="D.clients.splice(${i},1);scheduleSave();render()">✕</button></td></tr>`).join('')}
+</tbody></table>
+<button class="btn" style="margin-top:5px" onclick="D.clients.push({id:++D.nextId,name:'',type:'',fee:0,since:'',memo:''});render()">+ 追加</button></div>`;
+}
+
+function rPipeline(){
+  return`<div class="phdr"><div><div class="ptitle">商談パイプライン</div><div class="psub">リード → 成約 の管理</div></div><button class="btn btn-p" onclick="D.pipeline.push({id:++D.nextId,name:'',stage:'lead',date:'',fee:10,memo:''});render()">+ 追加</button></div>
+<div class="kanban">${SK.map(sk=>{const items=D.pipeline.filter(p=>p.stage===sk);return`<div class="kcol"><div class="khead"><span>${STAGES[sk]}</span><span>${items.length}</span></div>${items.map(p=>`<div class="kcard" onclick="advance(${p.id})"><div class="kname">${h(p.name)||'—'}</div>${p.date?`<div class="kdate">${h(p.date)}</div>`:''}<div class="kmeta"><span class="tag tg-sub" style="font-size:9px">¥${p.fee}万</span><span style="font-size:9px;color:var(--text3)">↗</span></div></div>`).join('')}</div>`;}).join('')}</div>
+<div class="card"><div class="ctitle">詳細</div><table class="tbl"><thead><tr><th>名前</th><th>ステージ</th><th>日程</th><th style="text-align:right">月額(万)</th><th>メモ</th><th></th></tr></thead><tbody>
+${D.pipeline.map((p,i)=>`<tr><td><input value="${h(p.name)}" oninput="D.pipeline[${i}].name=this.value;scheduleSave()"></td><td><select oninput="D.pipeline[${i}].stage=this.value;scheduleSave();render()">${SK.map(sk=>`<option value="${sk}"${p.stage===sk?' selected':''}>${STAGES[sk]}</option>`).join('')}</select></td><td><input value="${h(p.date||'')}" oninput="D.pipeline[${i}].date=this.value" style="width:75px"></td><td><input type="number" value="${p.fee||0}" oninput="D.pipeline[${i}].fee=parseFloat(this.value)||0" style="text-align:right;width:48px"></td><td><input value="${h(p.memo||'')}" oninput="D.pipeline[${i}].memo=this.value"></td><td><button class="btn btn-d" style="padding:1px 5px" onclick="D.pipeline.splice(${i},1);scheduleSave();render()">✕</button></td></tr>`).join('')}
+</tbody></table></div>`;
+}
+
+function rProjects(){
+  const fp=fProjects();
+  const st={active:D.projects.filter(p=>p.status==='active').length,wip:D.projects.filter(p=>p.status==='wip').length,idea:D.projects.filter(p=>p.status==='idea').length,arch:D.projects.filter(p=>p.status==='archive').length};
+  return`<div class="phdr"><div><div class="ptitle">プロジェクト一覧</div><div class="psub">${D.projects.length}件登録 / GitHub 230+リポジトリ</div></div><button class="btn btn-p" onclick="showAdd=!showAdd;render()">+ 追加</button></div>
+<div class="stats" style="grid-template-columns:repeat(4,1fr)"><div class="stat"><div class="sv" style="color:var(--green)">${st.active}</div><div class="sl">稼働中</div></div><div class="stat"><div class="sv" style="color:var(--amber)">${st.wip}</div><div class="sl">開発中</div></div><div class="stat"><div class="sv" style="color:var(--purple)">${st.idea}</div><div class="sl">アイデア</div></div><div class="stat"><div class="sv" style="color:var(--text3)">${st.arch}</div><div class="sl">アーカイブ</div></div></div>
+${showAdd?`<div class="addform"><div class="addgrid">
+<div><div class="flbl">名前 *</div><input value="${h(addForm.name)}" oninput="addForm.name=this.value" placeholder="プロジェクト名"></div>
+<div><div class="flbl">GitHub/パス</div><input value="${h(addForm.gh)}" oninput="addForm.gh=this.value" placeholder="hideo-t/repo"></div>
+<div><div class="flbl">ユーザー軸</div><select oninput="addForm.user=this.value">${Object.entries(UM).map(([k,v])=>`<option value="${k}"${addForm.user===k?' selected':''}>${v}</option>`).join('')}</select></div>
+<div><div class="flbl">収益軸</div><select oninput="addForm.rev=this.value">${Object.entries(RM).map(([k,v])=>`<option value="${k}"${addForm.rev===k?' selected':''}>${v}</option>`).join('')}</select></div>
+<div><div class="flbl">ストック</div><select oninput="addForm.stock=this.value">${Object.entries(SM).map(([k,v])=>`<option value="${k}"${addForm.stock===k?' selected':''}>${v}</option>`).join('')}</select></div>
+<div><div class="flbl">状態</div><select oninput="addForm.status=this.value">${Object.entries(STM).map(([k,v])=>`<option value="${k}"${addForm.status===k?' selected':''}>${v}</option>`).join('')}</select></div>
+<div><div class="flbl">月額収益(円)</div><input type="number" value="${addForm.revAmt}" oninput="addForm.revAmt=parseInt(this.value)||0"></div>
+<div><div class="flbl">クライアント</div><input value="${h(addForm.client)}" oninput="addForm.client=this.value"></div>
+<div style="grid-column:span 2"><div class="flbl">メモ</div><input value="${h(addForm.memo)}" oninput="addForm.memo=this.value"></div>
+</div><div class="btn-row"><button class="btn btn-p" onclick="addProject()">追加</button><button class="btn" onclick="showAdd=false;render()">キャンセル</button></div></div>`:''}
+<div class="fbar">
+<input type="text" placeholder="🔍 検索..." value="${h(fP.search)}" oninput="fP.search=this.value;render()">
+${Object.entries(UM).map(([k,v])=>`<button class="chip${fP.user===k?' on':''}" onclick="fP.user=fP.user==='${k}'?'':'${k}';render()">${v}</button>`).join('')}
+${Object.entries(RM).map(([k,v])=>`<button class="chip${fP.rev===k?' on':''}" onclick="fP.rev=fP.rev==='${k}'?'':'${k}';render()">${v}</button>`).join('')}
+${Object.entries(STM).map(([k,v])=>`<button class="chip${fP.status===k?' on':''}" onclick="fP.status=fP.status==='${k}'?'':'${k}';render()">${v}</button>`).join('')}
+${fP.search||fP.user||fP.rev||fP.status?`<button class="chip" onclick="fP={search:'',user:'',rev:'',status:''};render()">✕</button>`:''}
+</div>
+<div class="stxt">${fp.length}件 / 全${D.projects.length}件</div>
+<div class="plist">${fp.map(p=>`<div class="prow${expP[p.id]?' exp open':''}">
+<div class="ptop" onclick="expP[${p.id}]=!expP[${p.id}];render()"><div class="pname">${h(p.name)}</div><div style="display:flex;gap:3px;flex-wrap:wrap">${tagP(p)}</div><div class="pmrr">${p.revAmt>0?'¥'+(p.revAmt/10000).toFixed(0)+'万':''}</div></div>
+<div class="pbar-bg"><div class="pbar" style="width:${p.progress}%;background:${p.status==='active'?'var(--green)':p.status==='wip'?'var(--amber)':'rgba(255,255,255,.1)'}"></div></div>
+<div class="pdetail">
+<div><div class="dlbl">名前</div><input value="${h(p.name)}" oninput="updP(${p.id},'name',this.value)"></div>
+<div><div class="dlbl">GitHub</div><input value="${h(p.gh||'')}" oninput="updP(${p.id},'gh',this.value)"></div>
+<div><div class="dlbl">ユーザー軸</div><select oninput="updP(${p.id},'user',this.value)">${Object.entries(UM).map(([k,v])=>`<option value="${k}"${p.user===k?' selected':''}>${v}</option>`).join('')}</select></div>
+<div><div class="dlbl">収益軸</div><select oninput="updP(${p.id},'rev',this.value)">${Object.entries(RM).map(([k,v])=>`<option value="${k}"${p.rev===k?' selected':''}>${v}</option>`).join('')}</select></div>
+<div><div class="dlbl">ストック</div><select oninput="updP(${p.id},'stock',this.value)">${Object.entries(SM).map(([k,v])=>`<option value="${k}"${p.stock===k?' selected':''}>${v}</option>`).join('')}</select></div>
+<div><div class="dlbl">状態</div><select oninput="updP(${p.id},'status',this.value)">${Object.entries(STM).map(([k,v])=>`<option value="${k}"${p.status===k?' selected':''}>${v}</option>`).join('')}</select></div>
+<div><div class="dlbl">進捗 ${p.progress}%</div><input type="range" min="0" max="100" value="${p.progress}" oninput="updP(${p.id},'progress',parseInt(this.value))" style="width:100%;accent-color:var(--green)"></div>
+<div><div class="dlbl">月額(円)</div><input type="number" value="${p.revAmt||0}" oninput="updP(${p.id},'revAmt',parseInt(this.value)||0)"></div>
+<div><div class="dlbl">クライアント</div><input value="${h(p.client||'')}" oninput="updP(${p.id},'client',this.value)"></div>
+<div style="grid-column:span 2"><div class="dlbl">メモ</div><textarea oninput="updP(${p.id},'memo',this.value)">${h(p.memo||'')}</textarea></div>
+<div style="grid-column:span 2"><div class="btn-row">${p.gh&&!p.gh.startsWith('local')?`<a href="https://github.com/${p.gh}" target="_blank" class="btn">GitHub →</a>`:''}<button class="btn btn-d" onclick="if(confirm('削除?'))remP(${p.id})">削除</button></div></div>
+</div></div>`).join('')}</div>`;
+}
+
+function rRevenue(){
+  const subs=D.projects.filter(p=>p.rev==='sub'&&p.revAmt>0);
+  const tot=subs.reduce((s,p)=>s+(p.revAmt||0),0);
+  const onces=D.projects.filter(p=>p.rev==='once');
+  const frees=D.projects.filter(p=>p.rev==='free'&&p.status==='active');
+  return`<div class="phdr"><div><div class="ptitle">収益管理</div></div></div>
+<div class="revgrid">
+<div class="revcrd"><div style="font-size:.65rem;color:var(--text3)">サブスク月次MRR</div><div class="revval">¥${(tot/10000).toFixed(1)}万/月</div>${subs.map(p=>`<div class="revitem"><span>${h(p.name)}</span><span style="color:var(--green)">¥${(p.revAmt/10000).toFixed(1)}万</span></div>`).join('')}${!subs.length?'<div style="font-size:.65rem;color:var(--text3)">サブスク収益なし</div>':''}</div>
+<div class="revcrd"><div style="font-size:.65rem;color:var(--text3)">1回型（${onces.length}件）</div><div class="revval" style="color:var(--amber)">${onces.length}件</div>${onces.map(p=>`<div class="revitem"><span>${h(p.name)}</span><span class="tag ${STCOL[p.status]}">${STM[p.status]}</span></div>`).join('')}</div>
+</div>
+<div class="card"><div class="ctitle" style="color:var(--amber)">⚠ 収益化余地</div><div style="font-size:.72rem;color:var(--text2);line-height:1.9">無収益の稼働中: <strong style="color:var(--text)">${frees.length}件</strong> — ${frees.map(p=>`<span class="tag tg-act">${h(p.name)}</span>`).join(' ')}</div></div>`;
+}
+
+function rGitHub(){
+  const own=fetched.filter(r=>!r.fork);
+  const maxSc=Math.max(...getVisible().map(r=>r.score),1);
+  const vis=getVisible();
+  return`<div class="phdr"><div><div class="ptitle">GitHub リポジトリ発掘</div><div class="psub">全リポジトリ取得・スコアリング → アイデアストックに追加</div></div></div>
+<div class="irow">
+<div class="fld"><div class="flbl">GitHubユーザー名</div><input type="text" id="ghu" value="hideo-t"></div>
+<div class="fld"><div class="flbl">Token（任意）</div><input type="password" id="ght" placeholder="ghp_xxxx"></div>
+<button class="btn btn-p" id="fbtn" onclick="doFetch()">取得・分析</button>
+</div>
+<div class="note">TokenなしでもPublicリポジトリは全取得可。Private含む場合はGitHub Settings → Personal access tokens → Fine-grained → repo:read</div>
+<div class="progwrap" id="fprog"><div class="progtxt" id="ptxt"></div><div class="progbg"><div class="progfill" id="pfill" style="width:0%"></div></div></div>
+<div id="ferr"></div>
+${own.length>0?`
+<div class="stats">
+<div class="stat"><div class="sv">${own.length}</div><div class="sl">自作リポジトリ</div></div>
+<div class="stat"><div class="sv" style="color:var(--amber)">${own.filter(r=>r.isGem).length}</div><div class="sl">💎 発掘候補</div></div>
+<div class="stat"><div class="sv" style="color:var(--blue)">${own.filter(r=>r.daysSincePush>=180&&r.daysSincePush<730&&r.size>30).length}</div><div class="sl">⏰ 埋もれ中</div></div>
+<div class="stat"><div class="sv" style="color:var(--green)">${own.filter(r=>!sheetIds.has(String(r.id))).length}</div><div class="sl">未追加</div></div>
+</div>
+<div class="selbar${sel.size>0?' show':''}" id="selbar">
+<span class="selcnt">${sel.size}件選択</span>
+<select id="selgrp"><option>未分類</option><option>AI・Bot</option><option>収益化候補</option><option>横展開可能</option><option>顧客向け</option><option>個人プロジェクト</option><option>アーカイブ</option></select>
+<select id="selpri"><option value="high">優先度：高</option><option value="mid" selected>優先度：中</option><option value="low">優先度：低</option></select>
+<button class="btn btn-g" onclick="(async()=>{if(!GAS){alert('GAS URLを設定してください');return;}const g=document.getElementById('selgrp').value,p=document.getElementById('selpri').value;await pushSheet(fetched.filter(r=>sel.has(String(r.id))).map(r=>({...r,group:g,priority:p})));})()">📊 シートに追加</button>
+<button class="btn" onclick="clrSel()">解除</button>
+</div>
+<div class="fbar">
+<input type="text" placeholder="🔍 検索..." value="${h(rSearch)}" oninput="rSearch=this.value;render()">
+<button class="chip${rFilter==='all'?' on':''}" onclick="rFilter='all';render()">すべて</button>
+<button class="chip${rFilter==='gem'?' on':''}" onclick="rFilter='gem';render()">💎 発掘候補</button>
+<button class="chip${rFilter==='bur'?' on':''}" onclick="rFilter='bur';render()">⏰ 埋もれ</button>
+<button class="chip${rFilter==='new'?' on':''}" onclick="rFilter='new';render()">未追加のみ</button>
+<button class="btn" style="margin-left:auto;font-size:.62rem" onclick="selAll()">全選択</button>
+</div>
+<div class="stxt">${vis.length}件表示</div>
+<div class="rlist">${vis.map(r=>{
+  const inS=sheetIds.has(String(r.id)),isSel=sel.has(String(r.id)),isExp=expR[r.id];
+  const bar=Math.round(r.score/maxSc*100);
+  const bc=bar>70?'var(--green)':bar>40?'var(--amber)':'var(--blue)';
+  return`<div class="rcard${r.isGem?' gem':''}${isSel?' rsel':''}${isExp?' exp':''}">
+<div class="rtop">
+<div class="rchk" onclick="event.stopPropagation();toggleSel('${r.id}')">${isSel?'✓':''}</div>
+<span class="rname" onclick="expR[${r.id}]=!expR[${r.id}];render()">${h(r.name)}</span>
+${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
+${r.isGem?`<span class="tag tg-gem">💎 ${h((r.gemReason||'').slice(0,6))}</span>`:''}
+${inS?`<span class="tag tg-added">✓済</span>`:''}
+<span class="rmeta">${tago(r.daysSincePush)}</span>
+</div>
+<div class="rpbar-bg"><div class="rpbar" style="width:${bar}%;background:${bc}"></div></div>
+${isExp&&r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
+<div class="rdetail">
+<div><div class="dlbl">グループ</div><select onclick="event.stopPropagation()" onchange="r.group=this.value">${groups.map(g=>`<option value="${g}"${r.group===g?' selected':''}>${g}</option>`).join('')}</select></div>
+<div><div class="dlbl">優先度</div><select onclick="event.stopPropagation()" onchange="r.priority=this.value"><option value="high"${r.priority==='high'?' selected':''}>高</option><option value="mid"${r.priority==='mid'?' selected':''}>中</option><option value="low"${r.priority==='low'?' selected':''}>低</option></select></div>
+<div style="grid-column:span 2"><div class="dlbl">メモ</div><textarea onclick="event.stopPropagation()" oninput="r.memo=this.value">${h(r.memo||'')}</textarea></div>
+<div style="grid-column:span 2"><div class="btn-row"><a href="${r.html_url}" target="_blank" class="btn" onclick="event.stopPropagation()">GitHub →</a>${r.homepage?`<a href="${h(r.homepage)}" target="_blank" class="btn" onclick="event.stopPropagation()">公開 →</a>`:''}${!inS?`<button class="btn btn-g" onclick="event.stopPropagation();pushSheet([{...fetched.find(x=>x.id===${r.id})}])">📊 追加</button>`:`<button class="btn btn-d" onclick="event.stopPropagation();delSheet('${r.id}')">削除</button>`}</div></div>
+</div></div>`;}).join('')}</div>`:'<div style="text-align:center;padding:2rem;color:var(--text3)">「取得・分析」を押してください</div>'}`;
+}
+
+function rIdeas(){
+  const dIdeas=D.ideas;
+  const allRep=sheetRepos;
+  const hi=dIdeas.filter(i=>i.priority==='high'),mi=dIdeas.filter(i=>i.priority==='mid'),lo=dIdeas.filter(i=>i.priority==='low');
+  const sec=(lbl,list,col)=>list.length===0?'':
+    `<div class="stxt" style="color:${col};margin:10px 0 5px">${lbl}（${list.length}）</div>${list.map(idea=>{const gi=dIdeas.indexOf(idea);return`<div class="idearow"><span class="tag${idea.src==='client'?' tg-u':' tg-idea'}">${idea.src==='client'?'顧客発':'自発'}</span><div class="ideatxt"><input value="${h(idea.text)}" oninput="D.ideas[${gi}].text=this.value;scheduleSave()"></div><select onchange="D.ideas[${gi}].priority=this.value;scheduleSave();render()"><option value="high"${idea.priority==='high'?' selected':''}>高</option><option value="mid"${idea.priority==='mid'?' selected':''}>中</option><option value="low"${idea.priority==='low'?' selected':''}>低</option></select><button class="btn" style="padding:2px 6px;font-size:.62rem" onclick="ideaToPJ(${gi})">→PJ化</button><button class="btn btn-d" style="padding:2px 5px" onclick="D.ideas.splice(${gi},1);scheduleSave();render()">✕</button></div>`;}).join('')}`;
+
+  // Sheet repos grouped
+  let slist=allRep;
+  if(sSearch){const q=sSearch.toLowerCase();slist=slist.filter(r=>(r.repo_name||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q)||(r.memo||'').toLowerCase().includes(q));}
+  if(sFilter==='high')slist=slist.filter(r=>r.priority==='high');
+  if(sFilter==='active')slist=slist.filter(r=>r.status==='active');
+  if(sFilter==='idea')slist=slist.filter(r=>r.status==='idea');
+  const grouped={};slist.forEach(r=>{const g=r.group||'未分類';if(!grouped[g])grouped[g]=[];grouped[g].push(r);});
+  const po={high:0,mid:1,low:2};Object.keys(grouped).forEach(g=>grouped[g].sort((a,b)=>(po[a.priority]||1)-(po[b.priority]||1)));
+
+  return`<div class="phdr"><div><div class="ptitle">アイデアストック</div><div class="psub">手動アイデア + GitHub発掘リポジトリ</div></div><div class="btn-row"><button class="btn btn-p" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'self',priority:'high'});render()">+ 自発</button><button class="btn" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'client',priority:'high'});render()">+ 顧客発</button></div></div>
+${sec('🔴 優先度高',hi,'var(--red)')}${sec('🟡 優先度中',mi,'var(--amber)')}${sec('⬜ 優先度低',lo,'var(--text3)')}
+${allRep.length>0?`
+<div style="margin:1.25rem 0 .75rem;border-top:1px solid var(--border);padding-top:1rem">
+<div class="ctitle" style="margin-bottom:.75rem">📊 GitHubストック（Spreadsheet）<span style="font-size:.6rem;color:var(--text3);font-weight:300;margin-left:6px">${allRep.length}件</span></div>
+<div class="addgrp"><input type="text" id="ngrp" placeholder="新しいグループ名..."><button class="btn btn-g" onclick="addGrp()">+ グループ</button><button class="btn" onclick="loadSheetRepos().then(()=>render())">🔄 再読込</button></div>
+<div class="fbar">
+<input type="text" placeholder="🔍 検索..." value="${h(sSearch)}" oninput="sSearch=this.value;render()">
+<button class="chip${sFilter==='all'?' on':''}" onclick="sFilter='all';render()">すべて</button>
+<button class="chip${sFilter==='high'?' on':''}" onclick="sFilter='high';render()">優先度高</button>
+<button class="chip${sFilter==='active'?' on':''}" onclick="sFilter='active';render()">稼働中</button>
+<button class="chip${sFilter==='idea'?' on':''}" onclick="sFilter='idea';render()">アイデア</button>
+</div>
+${Object.keys(grouped).map(g=>{const items=grouped[g],open=expG[g]!==false;const hic=items.filter(r=>r.priority==='high').length,ac=items.filter(r=>r.status==='active').length;
+return`<div class="grpwrap"><div class="grphead" onclick="expG['${g}']=!expG['${g}'];render()"><div style="display:flex;align-items:center;gap:7px"><span style="font-size:.6rem;color:var(--text3)">${open?'▼':'▶'}</span><span class="grpname">${h(g)}</span><span style="font-size:.6rem;color:var(--text3)">${items.length}件</span></div><div class="grpmeta">${hic?`<span class="tag tg-hi">${hic} 高</span>`:''} ${ac?`<span class="tag tg-act">${ac} 稼働</span>`:''}</div></div>${open?`<div class="grpbody">${items.map(r=>stockCard(r)).join('')}</div>`:''}</div>`;}).join('')}
+</div>`:'<div style="margin-top:1rem;padding:1rem;text-align:center;font-size:.72rem;color:var(--text3)">GitHubタブで発掘してシートに追加するとここに表示されます</div>'}`;
+}
+
+function stockCard(r){
+  const id=r.id,isExp=expR['s_'+id];
+  const sm={active:'稼働中',wip:'開発中',idea:'アイデア',done:'完了'};
+  const sc={active:'tg-act',wip:'tg-wip',idea:'tg-idea',done:'tg-arch'};
+  const pc={high:'tg-hi',mid:'tg-mid',low:'tg-lo2'};
+  return`<div class="rcard${isExp?' exp':''}">
+<div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}'];render()">
+<span class="rname">${h(r.repo_name||'—')}</span>
+${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
+<span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status}</span>
+<span class="tag ${pc[r.priority]||'tg-lo2'}">${r.priority==='high'?'高':r.priority==='mid'?'中':'低'}</span>
+</div>
+${r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
+<div class="rdetail">
+<div><div class="dlbl">グループ</div><select onclick="event.stopPropagation()" onchange="updSheet('${id}','group',this.value)">${groups.map(g=>`<option value="${g}"${(r.group||'未分類')===g?' selected':''}>${g}</option>`).join('')}</select></div>
+<div><div class="dlbl">ステータス</div><select onclick="event.stopPropagation()" onchange="updSheet('${id}','status',this.value)"><option value="idea"${r.status==='idea'?' selected':''}>アイデア</option><option value="wip"${r.status==='wip'?' selected':''}>開発中</option><option value="active"${r.status==='active'?' selected':''}>稼働中</option><option value="done"${r.status==='done'?' selected':''}>完了</option></select></div>
+<div><div class="dlbl">優先度</div><select onclick="event.stopPropagation()" onchange="updSheet('${id}','priority',this.value)"><option value="high"${r.priority==='high'?' selected':''}>高</option><option value="mid"${r.priority==='mid'?' selected':''}>中</option><option value="low"${r.priority==='low'?' selected':''}>低</option></select></div>
+<div><div class="dlbl">メモ</div><textarea onclick="event.stopPropagation()" onchange="updSheet('${id}','memo',this.value)">${h(r.memo||'')}</textarea></div>
+<div style="grid-column:span 2"><div class="btn-row">${r.url?`<a href="${r.url}" target="_blank" class="btn" onclick="event.stopPropagation()">GitHub →</a>`:''} ${r.homepage?`<a href="${h(r.homepage)}" target="_blank" class="btn" onclick="event.stopPropagation()">公開 →</a>`:''} <button class="btn btn-d" onclick="event.stopPropagation();delSheet('${id}')">削除</button></div></div>
+</div></div>`;
+}
+
+function rNote(){
+  return`<div class="phdr"><div><div class="ptitle">メモ・目標設定</div></div></div>
+<div class="card"><div class="ctitle">目標</div><table class="tbl"><tbody>
+<tr><td style="color:var(--text2)">目標クライアント数</td><td><input type="number" value="${D.goals.clients}" oninput="D.goals.clients=parseInt(this.value)||25;scheduleSave()" style="text-align:right;width:60px"> 件</td></tr>
+<tr><td style="color:var(--text2)">目標MRR</td><td><input type="number" value="${D.goals.mrr}" oninput="D.goals.mrr=parseInt(this.value)||500;scheduleSave()" style="text-align:right;width:60px"> 万円</td></tr>
+</tbody></table></div>
+<div class="notearea"><textarea oninput="D.note=this.value;scheduleSave()" placeholder="今日の進捗・気づき・次のアクション...">${h(D.note)}</textarea></div>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// MAIN RENDER
+// ═══════════════════════════════════════════════════════════
+function render(){
+  const map={overview:rOverview,pipeline:rPipeline,projects:rProjects,revenue:rRevenue,github:rGitHub,ideas:rIdeas,note:rNote};
+  document.getElementById('main').innerHTML=(map[tab]||rOverview)();
+}
+function go(t,el){
+  tab=t;
+  document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));
+  if(el)el.classList.add('on');
+  render();
+}
+
+// ═══════════════════════════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════════════════════════
+window.onload=()=>{
+  if(GAS){
+    document.getElementById('modal-gas-url').value=GAS;
+    document.getElementById('gas-modal').style.display='none';
+    loadGAS();
+  } else {
+    document.getElementById('gas-modal').style.display='flex';
+  }
+};
+</script>
+</body>
+</html>
