@@ -278,47 +278,90 @@ let D = JSON.parse(JSON.stringify(DEF));
 // ═══════════════════════════════════════════════════════════
 function setDot(s,m){document.getElementById('dot').className='dot'+(s==='ok'?' ok':s==='err'?' err':s==='busy'?' busy':'');document.getElementById('gas-lbl').textContent=m;}
 async function gasGet(p){const r=await fetch(GAS+'?'+new URLSearchParams(p));return r.json();}
-async function gasPost(b){
-  // GASはPOSTのCORSリダイレクトが問題になるためGETパラメータ経由で送信
-  const url=GAS+'?payload='+encodeURIComponent(JSON.stringify(b));
-  const r=await fetch(url);
+// ── GAS通信 ──────────────────────────────────────────────
+// GETは常に動く。POSTやpayload付きGETは大きいデータでURL長制限に引っかかる。
+// 方針: dashboardデータ → localStorageのみ。リポジトリ操作 → GET payload（小さい）。
+
+async function gasGet(p){
+  const r = await fetch(GAS+'?'+new URLSearchParams(p));
   return r.json();
 }
 
-function loadLocal(){try{const r=localStorage.getItem(LS);if(r)D=JSON.parse(r);}catch(e){}}
-function saveLocal(){try{localStorage.setItem(LS,JSON.stringify(D));}catch(e){}}
-async function saveGAS(){
-  saveLocal();
-  if(!GAS)return;
-  setDot('busy','保存中...');
-  try{const r=await gasPost({key:DK,value:D});setDot(r.status==='ok'?'ok':'err',r.status==='ok'?`保存済 ${new Date().getHours()}:${String(new Date().getMinutes()).padStart(2,'0')}`:'保存失敗');}
-  catch(e){setDot('err','通信エラー');}
+// 小さいデータ専用（リポジトリ操作など）
+function gasSmallWrite(b){
+  if(!GAS) return Promise.resolve({status:'no_gas'});
+  const url = GAS+'?payload='+encodeURIComponent(JSON.stringify(b));
+  return fetch(url).then(r=>r.json()).catch(()=>({status:'error'}));
 }
-function scheduleSave(){if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(saveGAS,3000);}
-function manualSave(){saveGAS();}
+
+function loadLocal(){
+  try{
+    const r=localStorage.getItem(LS);
+    if(r){
+      const p=JSON.parse(r);
+      D=Object.assign(JSON.parse(JSON.stringify(DEF)),p);
+      D.pipeline = Array.isArray(p.pipeline) ? p.pipeline : DEF.pipeline;
+      D.clients  = Array.isArray(p.clients)  ? p.clients  : DEF.clients;
+      D.mrr      = Array.isArray(p.mrr)      ? p.mrr      : DEF.mrr;
+      D.projects = Array.isArray(p.projects) ? p.projects : DEF.projects;
+      D.ideas    = Array.isArray(p.ideas)    ? p.ideas    : DEF.ideas;
+      D.goals    = p.goals   || DEF.goals;
+      D.note     = p.note    || DEF.note;
+      D.nextId   = p.nextId  || DEF.nextId;
+    }
+  }catch(e){ console.error('loadLocal:',e); }
+}
+function saveLocal(){
+  try{ localStorage.setItem(LS,JSON.stringify(D)); }catch(e){}
+}
+
+// dashboardは常にlocalStorageに保存（GASには送らない→URL長制限回避）
+function scheduleSave(){
+  saveLocal();
+  if(saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(()=>{
+    const t=new Date();
+    setDot('ok',`保存済 ${t.getHours()}:${String(t.getMinutes()).padStart(2,'0')}`);
+  }, 500);
+}
+function manualSave(){
+  saveLocal();
+  const t=new Date();
+  setDot('ok',`保存済 ${t.getHours()}:${String(t.getMinutes()).padStart(2,'0')}`);
+}
 
 async function loadGAS(){
-  if(!GAS){loadLocal();render();return;}
-  setDot('busy','読込中...');
+  loadLocal(); // dashboardは常にlocalStorageから
+  if(!GAS){ render(); return; }
+  setDot('busy','GAS接続確認中...');
+  // GAS接続確認（pingのみ）
   try{
-    const r=await gasGet({key:DK});
-    if(r.status==='ok'&&r.value){D=JSON.parse(r.value);setDot('ok','GAS接続済');}
-    else{loadLocal();setDot('ok','GAS接続済（新規）');}
-  }catch(e){loadLocal();setDot('err','GASエラー→ローカル');}
+    const r = await gasGet({action:'get_repos'});
+    if(r.status==='ok'||r.status==='not_found'||Array.isArray(r.repos)){
+      setDot('ok','GAS接続済 (リポジトリDB)');
+      sheetRepos = r.repos||[];
+      sheetIds   = new Set(sheetRepos.map(x=>String(x.id)));
+      const eg   = [...new Set(sheetRepos.map(x=>x.group).filter(Boolean))];
+      eg.forEach(g=>{ if(!groups.includes(g)) groups.push(g); });
+    } else {
+      setDot('ok','GAS接続済');
+    }
+  }catch(e){
+    setDot('err','GAS接続失敗 (ローカルデータ使用)');
+  }
   render();
-  loadSheetRepos();
 }
 
 async function loadSheetRepos(){
-  if(!GAS)return;
+  if(!GAS) return;
   try{
-    const r=await gasGet({action:'get_repos'});
+    const r = await gasGet({action:'get_repos'});
     if(r.status==='ok'){
-      sheetRepos=r.repos||[];
-      sheetIds=new Set(sheetRepos.map(x=>String(x.id)));
-      const eg=[...new Set(sheetRepos.map(x=>x.group).filter(Boolean))];
-      eg.forEach(g=>{if(!groups.includes(g))groups.push(g);});
-      if(tab==='ideas'||tab==='github')render();
+      sheetRepos = r.repos||[];
+      sheetIds   = new Set(sheetRepos.map(x=>String(x.id)));
+      const eg   = [...new Set(sheetRepos.map(x=>x.group).filter(Boolean))];
+      eg.forEach(g=>{ if(!groups.includes(g)) groups.push(g); });
+      if(tab==='ideas'||tab==='github') render();
     }
   }catch(e){}
 }
@@ -330,8 +373,7 @@ function connectGASSide(){
   loadGAS();
 }
 
-// Auto-save every 60s
-setInterval(saveGAS,60000);
+setInterval(saveLocal, 30000); // 30秒ごとにlocalStorage保存
 
 // ═══════════════════════════════════════════════════════════
 // MAPS & HELPERS
@@ -464,32 +506,32 @@ async function doFetch(){
   render();
 }
 async function pushSheet(repos){
-  if(!GAS){alert('GAS URLを設定してください');return;}
-  setDot('busy','保存中...');
-  try{
-    const r=await gasPost({action:'add_repos',repos});
-    if(r.status==='ok'){
-      repos.forEach(x=>sheetIds.add(String(x.id)));sel.clear();
-      setDot('ok',`+${r.added}件追加`);
-      await loadSheetRepos();render();
-    }else setDot('err',r.message||'追加失敗');
-  }catch(e){setDot('err','通信エラー');}
+  if(!GAS){ alert('GAS URLを設定してください'); return; }
+  // リポジトリデータは小さい単位で送信
+  setDot('busy','送信中...');
+  let added=0;
+  for(const repo of repos){
+    const r = await gasSmallWrite({action:'add_repos', repos:[repo]});
+    if(r.status==='ok'){ sheetIds.add(String(repo.id)); added+=r.added||0; }
+  }
+  sel.clear();
+  setDot('ok', added+'件追加完了');
+  await loadSheetRepos();
+  render();
 }
+
 async function delSheet(id){
-  if(!GAS||!confirm('削除しますか？'))return;
-  setDot('busy','削除中...');
-  try{
-    const r=await gasPost({action:'delete_repo',id});
-    if(r.status==='ok'){sheetIds.delete(String(id));sheetRepos=sheetRepos.filter(x=>String(x.id)!==String(id));setDot('ok','削除完了');render();}
-  }catch(e){setDot('err','通信エラー');}
+  if(!confirm('削除しますか？')) return;
+  sheetIds.delete(String(id));
+  sheetRepos = sheetRepos.filter(x=>String(x.id)!==String(id));
+  render();
+  if(GAS) gasSmallWrite({action:'delete_repo', id});
 }
-async function updSheet(id,field,val){
-  const i=sheetRepos.findIndex(r=>String(r.id)===String(id));
-  if(i>=0)sheetRepos[i][field]=val;
-  if(!GAS)return;
-  setDot('busy','更新中...');
-  try{const r=await gasPost({action:'update_repo',id,[field]:val});setDot(r.status==='ok'?'ok':'err',r.status==='ok'?'更新完了':'更新失敗');}
-  catch(e){setDot('err','通信エラー');}
+
+async function updSheet(id, field, val){
+  const i = sheetRepos.findIndex(r=>String(r.id)===String(id));
+  if(i>=0) sheetRepos[i][field]=val;
+  if(GAS) gasSmallWrite({action:'update_repo', id, [field]:val});
 }
 function selAll(){getVisible().forEach(r=>sel.add(String(r.id)));render();}
 function clrSel(){sel.clear();render();}
@@ -675,8 +717,6 @@ function renderGroups(grouped, po){
 function rIdeas(){
   const allRep = sheetRepos;
   const po = {high:0, mid:1, low:2};
-
-  // 検索・フィルター・並び替え
   let list = [...(D.ideas||[])];
   if(iSearch){ const q=iSearch.toLowerCase(); list=list.filter(i=>i.text.toLowerCase().includes(q)); }
   if(iSrc) list = list.filter(i=>i.src===iSrc);
@@ -700,7 +740,6 @@ function rIdeas(){
 </div>`;
   };
 
-  // GitHubストック
   let slist = [...allRep];
   if(sSearch){ const q=sSearch.toLowerCase(); slist=slist.filter(r=>(r.repo_name||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q)); }
   if(sFilter==='high')   slist=slist.filter(r=>r.priority==='high');
@@ -711,25 +750,25 @@ function rIdeas(){
   Object.keys(grouped).forEach(g=>grouped[g].sort((a,b)=>(po[a.priority]||1)-(po[b.priority]||1)));
 
   const searchBox = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:10px 12px;margin-bottom:.75rem">
-  <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-    <input type="text" value="${h(iSearch)}" placeholder="🔍 アイデアを検索..." oninput="iSearch=this.value;render()"
-      style="flex:1;min-width:140px;font-size:.72rem;padding:5px 9px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none">
-    <button class="chip${iSrc===''?' on':''}" onclick="iSrc='';render()">すべて</button>
-    <button class="chip${iSrc==='self'?' on':''}" onclick="iSrc=iSrc==='self'?'':'self';render()">自発</button>
-    <button class="chip${iSrc==='client'?' on':''}" onclick="iSrc=iSrc==='client'?'':'client';render()">顧客発</button>
-  </div>
-  <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
-    <span style="font-size:.62rem;color:var(--text3)">並び替え:</span>
-    ${[['priority','優先度'],['newest','新しい順'],['text','テキスト順'],['src','種別']].map(([k,l])=>
-      `<button class="chip${iSort===k?' on':''}" onclick="iSort='${k}';render()" style="font-size:.62rem;padding:2px 8px">${l}</button>`
-    ).join('')}
-    <span style="margin-left:auto;font-size:.62rem;font-family:var(--mono);color:var(--text3)">${list.length}/${(D.ideas||[]).length}件</span>
-  </div>
+<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+  <input type="text" value="${h(iSearch)}" placeholder="🔍 アイデアを検索..." oninput="iSearch=this.value;render()"
+    style="flex:1;min-width:140px;font-size:.72rem;padding:5px 9px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none">
+  <button class="chip${iSrc===''?' on':''}" onclick="iSrc='';render()">すべて</button>
+  <button class="chip${iSrc==='self'?' on':''}" onclick="iSrc=iSrc==='self'?'':'self';render()">自発</button>
+  <button class="chip${iSrc==='client'?' on':''}" onclick="iSrc=iSrc==='client'?'':'client';render()">顧客発</button>
+</div>
+<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+  <span style="font-size:.62rem;color:var(--text3)">並び替え:</span>
+  ${[['priority','優先度'],['newest','新しい順'],['text','テキスト'],['src','種別']].map(([k,l])=>
+    `<button class="chip${iSort===k?' on':''}" onclick="iSort='${k}';render()" style="font-size:.62rem;padding:2px 8px">${l}</button>`
+  ).join('')}
+  <span style="margin-left:auto;font-size:.62rem;font-family:var(--mono);color:var(--text3)">${list.length}/${(D.ideas||[]).length}件</span>
+</div>
 </div>`;
 
   const stockSection = allRep.length > 0
     ? `<div style="margin:1.25rem 0 .75rem;border-top:1px solid var(--border);padding-top:1rem">
-<div class="ctitle" style="margin-bottom:.75rem">📊 GitHubストック（Spreadsheet）<span style="font-size:.6rem;color:var(--text3);font-weight:300;margin-left:6px">${allRep.length}件</span></div>
+<div class="ctitle" style="margin-bottom:.75rem">📊 GitHubストック<span style="font-size:.6rem;color:var(--text3);font-weight:300;margin-left:6px">${allRep.length}件</span></div>
 <div class="addgrp"><input type="text" id="ngrp" placeholder="新しいグループ名..."><button class="btn btn-g" onclick="addGrp()">+ グループ</button><button class="btn" onclick="loadSheetRepos().then(()=>render())">🔄 再読込</button></div>
 <div class="fbar">
   <input type="text" placeholder="🔍 検索..." value="${h(sSearch)}" oninput="sSearch=this.value;render()">
@@ -802,12 +841,16 @@ function go(t,el){
 // BOOT
 // ═══════════════════════════════════════════════════════════
 window.onload=()=>{
-  if(GAS){
-    document.getElementById('gas-url-input').value=GAS;
-    testGAS();
-  } else {
-    loadLocal();render();
+  // 旧バージョンキーから移行
+  const OLD_KEYS=['hideo_os_v3','hideo_os_v2','hideo_cmd_v2','hideo_progress_v3','hideo_pos_v1'];
+  if(!localStorage.getItem(LS)){
+    for(const k of OLD_KEYS){
+      const old=localStorage.getItem(k);
+      if(old){ try{ const p=JSON.parse(old); if(p&&(p.clients||p.pipeline||p.projects)){ localStorage.setItem(LS,old); console.log('移行:',k); break; } }catch(e){} }
+    }
   }
+  if(GAS){ document.getElementById('gas-url-input').value=GAS; }
+  loadGAS();
 };
 </script>
 </body>
