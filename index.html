@@ -233,9 +233,9 @@ let showAdd = false;
 let sel   = new Set();
 let addForm = {name:'',gh:'',user:'self',idea:'self',stock:'github',rev:'free',revAmt:0,status:'wip',client:'',memo:''};
 let fP = {search:'',user:'',rev:'',status:''};   // project filter
+let iSearch='';let iSort='priority';let iSrc='';
 let rFilter = 'gem'; let rSearch = '';
 let sFilter = 'all'; let sSearch = '';
-let iSearch = ''; let iSort = 'priority'; let iSrc = '';
 let fetched = []; let sheetRepos = []; let sheetIds = new Set();
 let groups = ['未分類','AI・Bot','収益化候補','横展開可能','顧客向け','個人プロジェクト','アーカイブ'];
 let saveTimer = null;
@@ -278,90 +278,47 @@ let D = JSON.parse(JSON.stringify(DEF));
 // ═══════════════════════════════════════════════════════════
 function setDot(s,m){document.getElementById('dot').className='dot'+(s==='ok'?' ok':s==='err'?' err':s==='busy'?' busy':'');document.getElementById('gas-lbl').textContent=m;}
 async function gasGet(p){const r=await fetch(GAS+'?'+new URLSearchParams(p));return r.json();}
-// ── GAS通信 ──────────────────────────────────────────────
-// GETは常に動く。POSTやpayload付きGETは大きいデータでURL長制限に引っかかる。
-// 方針: dashboardデータ → localStorageのみ。リポジトリ操作 → GET payload（小さい）。
-
-async function gasGet(p){
-  const r = await fetch(GAS+'?'+new URLSearchParams(p));
+async function gasPost(b){
+  // GASはPOSTのCORSリダイレクトが問題になるためGETパラメータ経由で送信
+  const url=GAS+'?payload='+encodeURIComponent(JSON.stringify(b));
+  const r=await fetch(url);
   return r.json();
 }
 
-// 小さいデータ専用（リポジトリ操作など）
-function gasSmallWrite(b){
-  if(!GAS) return Promise.resolve({status:'no_gas'});
-  const url = GAS+'?payload='+encodeURIComponent(JSON.stringify(b));
-  return fetch(url).then(r=>r.json()).catch(()=>({status:'error'}));
-}
-
-function loadLocal(){
-  try{
-    const r=localStorage.getItem(LS);
-    if(r){
-      const p=JSON.parse(r);
-      D=Object.assign(JSON.parse(JSON.stringify(DEF)),p);
-      D.pipeline = Array.isArray(p.pipeline) ? p.pipeline : DEF.pipeline;
-      D.clients  = Array.isArray(p.clients)  ? p.clients  : DEF.clients;
-      D.mrr      = Array.isArray(p.mrr)      ? p.mrr      : DEF.mrr;
-      D.projects = Array.isArray(p.projects) ? p.projects : DEF.projects;
-      D.ideas    = Array.isArray(p.ideas)    ? p.ideas    : DEF.ideas;
-      D.goals    = p.goals   || DEF.goals;
-      D.note     = p.note    || DEF.note;
-      D.nextId   = p.nextId  || DEF.nextId;
-    }
-  }catch(e){ console.error('loadLocal:',e); }
-}
-function saveLocal(){
-  try{ localStorage.setItem(LS,JSON.stringify(D)); }catch(e){}
-}
-
-// dashboardは常にlocalStorageに保存（GASには送らない→URL長制限回避）
-function scheduleSave(){
+function loadLocal(){try{const r=localStorage.getItem(LS);if(r)D=JSON.parse(r);}catch(e){}}
+function saveLocal(){try{localStorage.setItem(LS,JSON.stringify(D));}catch(e){}}
+async function saveGAS(){
   saveLocal();
-  if(saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(()=>{
-    const t=new Date();
-    setDot('ok',`保存済 ${t.getHours()}:${String(t.getMinutes()).padStart(2,'0')}`);
-  }, 500);
+  if(!GAS)return;
+  setDot('busy','保存中...');
+  try{const r=await gasPost({key:DK,value:D});setDot(r.status==='ok'?'ok':'err',r.status==='ok'?`保存済 ${new Date().getHours()}:${String(new Date().getMinutes()).padStart(2,'0')}`:'保存失敗');}
+  catch(e){setDot('err','通信エラー');}
 }
-function manualSave(){
-  saveLocal();
-  const t=new Date();
-  setDot('ok',`保存済 ${t.getHours()}:${String(t.getMinutes()).padStart(2,'0')}`);
-}
+function scheduleSave(){if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(saveGAS,3000);}
+function manualSave(){saveGAS();}
 
 async function loadGAS(){
-  loadLocal(); // dashboardは常にlocalStorageから
-  if(!GAS){ render(); return; }
-  setDot('busy','GAS接続確認中...');
-  // GAS接続確認（pingのみ）
+  if(!GAS){loadLocal();render();return;}
+  setDot('busy','読込中...');
   try{
-    const r = await gasGet({action:'get_repos'});
-    if(r.status==='ok'||r.status==='not_found'||Array.isArray(r.repos)){
-      setDot('ok','GAS接続済 (リポジトリDB)');
-      sheetRepos = r.repos||[];
-      sheetIds   = new Set(sheetRepos.map(x=>String(x.id)));
-      const eg   = [...new Set(sheetRepos.map(x=>x.group).filter(Boolean))];
-      eg.forEach(g=>{ if(!groups.includes(g)) groups.push(g); });
-    } else {
-      setDot('ok','GAS接続済');
-    }
-  }catch(e){
-    setDot('err','GAS接続失敗 (ローカルデータ使用)');
-  }
+    const r=await gasGet({key:DK});
+    if(r.status==='ok'&&r.value){D=JSON.parse(r.value);setDot('ok','GAS接続済');}
+    else{loadLocal();setDot('ok','GAS接続済（新規）');}
+  }catch(e){loadLocal();setDot('err','GASエラー→ローカル');}
   render();
+  loadSheetRepos();
 }
 
 async function loadSheetRepos(){
-  if(!GAS) return;
+  if(!GAS)return;
   try{
-    const r = await gasGet({action:'get_repos'});
+    const r=await gasGet({action:'get_repos'});
     if(r.status==='ok'){
-      sheetRepos = r.repos||[];
-      sheetIds   = new Set(sheetRepos.map(x=>String(x.id)));
-      const eg   = [...new Set(sheetRepos.map(x=>x.group).filter(Boolean))];
-      eg.forEach(g=>{ if(!groups.includes(g)) groups.push(g); });
-      if(tab==='ideas'||tab==='github') render();
+      sheetRepos=r.repos||[];
+      sheetIds=new Set(sheetRepos.map(x=>String(x.id)));
+      const eg=[...new Set(sheetRepos.map(x=>x.group).filter(Boolean))];
+      eg.forEach(g=>{if(!groups.includes(g))groups.push(g);});
+      if(tab==='ideas'||tab==='github')render();
     }
   }catch(e){}
 }
@@ -373,7 +330,8 @@ function connectGASSide(){
   loadGAS();
 }
 
-setInterval(saveLocal, 30000); // 30秒ごとにlocalStorage保存
+// Auto-save every 60s
+setInterval(saveGAS,60000);
 
 // ═══════════════════════════════════════════════════════════
 // MAPS & HELPERS
@@ -506,59 +464,32 @@ async function doFetch(){
   render();
 }
 async function pushSheet(repos){
-  if(!GAS){ alert('GAS URLを設定してください'); return; }
-  setDot('busy', repos.length+'件送信中...');
-  try {
-    // 一括送信（10件ずつ分割してURL長制限を回避）
-    const chunk = 10;
-    let added = 0;
-    for(let i=0; i<repos.length; i+=chunk){
-      const batch = repos.slice(i, i+chunk);
-      const r = await gasSmallWrite({action:'add_repos', repos:batch});
-      if(r.status==='ok'){
-        added += r.added||0;
-        batch.forEach(repo => {
-          sheetIds.add(String(repo.id));
-          // ローカルにも即反映
-          if(!sheetRepos.find(x=>String(x.id)===String(repo.id))){
-            sheetRepos.push({
-              id:repo.id, repo_name:repo.name, description:repo.description||'',
-              language:repo.language||'', url:repo.html_url||'', homepage:repo.homepage||'',
-              stars:repo.stargazers_count||0, size_kb:repo.size||0,
-              days_since_push:repo.daysSincePush||0, score:repo.score||0,
-              gem_reason:repo.gemReason||'', group:repo.group||'未分類',
-              priority:repo.priority||'mid', status:'idea', memo:repo.memo||''
-            });
-          }
-        });
-      }
-    }
-    sel.clear();
-    setDot('ok', added+'件追加 → アイデアストックで確認');
-    // アイデアストックタブに自動移動
-    tab = 'ideas';
-    document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));
-    const navBtns = document.querySelectorAll('.nav');
-    navBtns.forEach(n=>{ if(n.textContent.includes('アイデア')) n.classList.add('on'); });
-    render();
-  } catch(e) {
-    setDot('err', '送信エラー: '+e.message);
-    console.error(e);
-  }
+  if(!GAS){alert('GAS URLを設定してください');return;}
+  setDot('busy','保存中...');
+  try{
+    const r=await gasPost({action:'add_repos',repos});
+    if(r.status==='ok'){
+      repos.forEach(x=>sheetIds.add(String(x.id)));sel.clear();
+      setDot('ok',`+${r.added}件追加`);
+      await loadSheetRepos();render();
+    }else setDot('err',r.message||'追加失敗');
+  }catch(e){setDot('err','通信エラー');}
 }
-
 async function delSheet(id){
-  if(!confirm('削除しますか？')) return;
-  sheetIds.delete(String(id));
-  sheetRepos = sheetRepos.filter(x=>String(x.id)!==String(id));
-  render();
-  if(GAS) gasSmallWrite({action:'delete_repo', id});
+  if(!GAS||!confirm('削除しますか？'))return;
+  setDot('busy','削除中...');
+  try{
+    const r=await gasPost({action:'delete_repo',id});
+    if(r.status==='ok'){sheetIds.delete(String(id));sheetRepos=sheetRepos.filter(x=>String(x.id)!==String(id));setDot('ok','削除完了');render();}
+  }catch(e){setDot('err','通信エラー');}
 }
-
-async function updSheet(id, field, val){
-  const i = sheetRepos.findIndex(r=>String(r.id)===String(id));
-  if(i>=0) sheetRepos[i][field]=val;
-  if(GAS) gasSmallWrite({action:'update_repo', id, [field]:val});
+async function updSheet(id,field,val){
+  const i=sheetRepos.findIndex(r=>String(r.id)===String(id));
+  if(i>=0)sheetRepos[i][field]=val;
+  if(!GAS)return;
+  setDot('busy','更新中...');
+  try{const r=await gasPost({action:'update_repo',id,[field]:val});setDot(r.status==='ok'?'ok':'err',r.status==='ok'?'更新完了':'更新失敗');}
+  catch(e){setDot('err','通信エラー');}
 }
 function selAll(){getVisible().forEach(r=>sel.add(String(r.id)));render();}
 function clrSel(){sel.clear();render();}
@@ -717,230 +648,66 @@ ${isExp&&r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
 </div></div>`;}).join('')}</div>`:'<div style="text-align:center;padding:2rem;color:var(--text3)">「取得・分析」を押してください</div>'}`;
 }
 
-function renderGroups(grouped, po){
-  return Object.keys(grouped).map(function(g){
-    var items = grouped[g];
-    var open  = expG[g] !== false;
-    var hic   = items.filter(function(r){ return r.priority==='high'; }).length;
-    var ac    = items.filter(function(r){ return r.status==='active'; }).length;
-    var hiTag = hic ? '<span class="tag tg-hi">'+hic+' 高</span>' : '';
-    var acTag = ac  ? '<span class="tag tg-act">'+ac+' 稼働</span>' : '';
-    var body  = open ? '<div class="grpbody">'+items.map(function(r){ return stockCard(r); }).join('')+'</div>' : '';
-    var esc   = g.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-    return '<div class="grpwrap">'
-      +'<div class="grphead" onclick="expG[\'' + esc + '\']=!expG[\'' + esc + '\'];render()">'
-        +'<div style="display:flex;align-items:center;gap:7px">'
-          +'<span style="font-size:.6rem;color:var(--text3)">'+(open?'▼':'▶')+'</span>'
-          +'<span class="grpname">'+h(g)+'</span>'
-          +'<span style="font-size:.6rem;color:var(--text3)">'+items.length+'件</span>'
-        +'</div>'
-        +'<div class="grpmeta">'+hiTag+acTag+'</div>'
-      +'</div>'
-      +body
-    +'</div>';
-  }).join('');
-}
-
 function rIdeas(){
-  const allRep = sheetRepos;
-  const po = {high:0, mid:1, low:2};
-  let list = [...(D.ideas||[])];
-  if(iSearch){ const q=iSearch.toLowerCase(); list=list.filter(i=>i.text.toLowerCase().includes(q)); }
-  if(iSrc) list = list.filter(i=>i.src===iSrc);
-  if(iSort==='priority') list.sort((a,b)=>(po[a.priority]||1)-(po[b.priority]||1));
-  else if(iSort==='newest') list.sort((a,b)=>b.id-a.id);
-  else if(iSort==='text') list.sort((a,b)=>a.text.localeCompare(b.text,'ja'));
-  else if(iSort==='src') list.sort((a,b)=>a.src.localeCompare(b.src));
+  const allRep=sheetRepos;
+  const dIdeas=D.ideas;
+  const hi=dIdeas.filter(i=>i.priority==='high'),mi=dIdeas.filter(i=>i.priority==='mid'),lo=dIdeas.filter(i=>i.priority==='low');
+  const sec=(lbl,list,col)=>list.length===0?'':
+    `<div class="stxt" style="color:${col};margin:10px 0 5px">${lbl}（${list.length}）</div>${list.map(idea=>{const gi=dIdeas.indexOf(idea);return`<div class="idearow"><span class="tag${idea.src==='client'?' tg-u':' tg-idea'}">${idea.src==='client'?'顧客発':'自発'}</span><div class="ideatxt"><input value="${h(idea.text)}" oninput="D.ideas[${gi}].text=this.value;scheduleSave()"></div><select onchange="D.ideas[${gi}].priority=this.value;scheduleSave();render()"><option value="high"${idea.priority==='high'?' selected':''}>高</option><option value="mid"${idea.priority==='mid'?' selected':''}>中</option><option value="low"${idea.priority==='low'?' selected':''}>低</option></select><button class="btn" style="padding:2px 6px;font-size:.62rem" onclick="ideaToPJ(${gi})">→PJ化</button><button class="btn btn-d" style="padding:2px 5px" onclick="D.ideas.splice(${gi},1);scheduleSave();render()">✕</button></div>`;}).join('')}`;
 
-  const ideaCard = (idea) => {
-    const gi = (D.ideas||[]).indexOf(idea);
-    const pc = {high:'tg-hi', mid:'tg-mid', low:'tg-lo2'};
-    const pl = {high:'🔴 高', mid:'🟡 中', low:'⬜ 低'};
-    return `<div class="idearow">
-<span class="tag${idea.src==='client'?' tg-u':' tg-idea'}">${idea.src==='client'?'顧客発':'自発'}</span>
-<div class="ideatxt"><input value="${h(idea.text)}" oninput="D.ideas[${gi}].text=this.value;scheduleSave()"></div>
-<span class="tag ${pc[idea.priority]||'tg-lo2'}" style="cursor:pointer;user-select:none" title="クリックで優先度変更"
-  onclick="const oo=['high','mid','low'];const ii=oo.indexOf(D.ideas[${gi}].priority);D.ideas[${gi}].priority=oo[(ii+1)%3];scheduleSave();render()"
->${pl[idea.priority]||'⬜'}</span>
-<button class="btn" style="padding:2px 6px;font-size:.62rem" onclick="ideaToPJ(${gi})">→PJ化</button>
-<button class="btn btn-d" style="padding:2px 5px" onclick="D.ideas.splice(${gi},1);scheduleSave();render()">✕</button>
-</div>`;
-  };
-
-  let slist = [...allRep];
-  if(sSearch){ const q=sSearch.toLowerCase(); slist=slist.filter(r=>(r.repo_name||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q)); }
+  let slist=allRep;
+  if(sSearch){const q=sSearch.toLowerCase();slist=slist.filter(r=>(r.repo_name||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q));}
   if(sFilter==='high')   slist=slist.filter(r=>r.priority==='high');
   if(sFilter==='active') slist=slist.filter(r=>r.status==='active');
   if(sFilter==='idea')   slist=slist.filter(r=>r.status==='idea');
-  const grouped = {};
-  slist.forEach(r=>{ const g=r.group||'未分類'; if(!grouped[g])grouped[g]=[]; grouped[g].push(r); });
+  const po={high:0,mid:1,low:2};
+  const grouped={};
+  slist.forEach(r=>{const g=r.group||'未分類';if(!grouped[g])grouped[g]=[];grouped[g].push(r);});
   Object.keys(grouped).forEach(g=>grouped[g].sort((a,b)=>(po[a.priority]||1)-(po[b.priority]||1)));
 
-  const searchBox = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:10px 12px;margin-bottom:.75rem">
-<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-  <input type="text" value="${h(iSearch)}" placeholder="🔍 アイデアを検索..." oninput="iSearch=this.value;render()"
-    style="flex:1;min-width:140px;font-size:.72rem;padding:5px 9px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none">
-  <button class="chip${iSrc===''?' on':''}" onclick="iSrc='';render()">すべて</button>
-  <button class="chip${iSrc==='self'?' on':''}" onclick="iSrc=iSrc==='self'?'':'self';render()">自発</button>
-  <button class="chip${iSrc==='client'?' on':''}" onclick="iSrc=iSrc==='client'?'':'client';render()">顧客発</button>
-</div>
-<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
-  <span style="font-size:.62rem;color:var(--text3)">並び替え:</span>
-  ${[['priority','優先度'],['newest','新しい順'],['text','テキスト'],['src','種別']].map(([k,l])=>
-    `<button class="chip${iSort===k?' on':''}" onclick="iSort='${k}';render()" style="font-size:.62rem;padding:2px 8px">${l}</button>`
-  ).join('')}
-  <span style="margin-left:auto;font-size:.62rem;font-family:var(--mono);color:var(--text3)">${list.length}/${(D.ideas||[]).length}件</span>
-</div>
-</div>`;
+  // render後にDOM操作でサムネイルグリッドを注入
+  setTimeout(function(){
+    var root=document.getElementById('thumb-grid-root');
+    if(root) renderThumbGroups(grouped,po,'thumb-grid-root');
+  },0);
 
-  const stockSection = allRep.length > 0
-    ? `<div style="margin:1.25rem 0 .75rem;border-top:1px solid var(--border);padding-top:1rem">
-<div class="ctitle" style="margin-bottom:.75rem">📊 GitHubストック<span style="font-size:.6rem;color:var(--text3);font-weight:300;margin-left:6px">${allRep.length}件</span></div>
+  return `<div class="phdr"><div><div class="ptitle">アイデアストック</div><div class="psub">手動アイデア + GitHub発掘リポジトリ</div></div><div class="btn-row"><button class="btn btn-p" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'self',priority:'high'});render()">+ 自発</button><button class="btn" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'client',priority:'high'});render()">+ 顧客発</button></div></div>
+${sec('🔴 優先度高',hi,'var(--red)')}${sec('🟡 優先度中',mi,'var(--amber)')}${sec('⬜ 優先度低',lo,'var(--text3)')}
+${allRep.length>0?`<div style="margin:1.25rem 0 .75rem;border-top:1px solid var(--border);padding-top:1rem">
+<div class="ctitle" style="margin-bottom:.75rem">📊 GitHubストック（Spreadsheet）<span style="font-size:.6rem;color:var(--text3);margin-left:6px">${allRep.length}件</span></div>
 <div class="addgrp"><input type="text" id="ngrp" placeholder="新しいグループ名..."><button class="btn btn-g" onclick="addGrp()">+ グループ</button><button class="btn" onclick="loadSheetRepos().then(()=>render())">🔄 再読込</button></div>
 <div class="fbar">
-  <input type="text" placeholder="🔍 検索..." value="${h(sSearch)}" oninput="sSearch=this.value;render()">
-  <button class="chip${sFilter==='all'?' on':''}" onclick="sFilter='all';render()">すべて</button>
-  <button class="chip${sFilter==='high'?' on':''}" onclick="sFilter='high';render()">優先度高</button>
-  <button class="chip${sFilter==='active'?' on':''}" onclick="sFilter='active';render()">稼働中</button>
-  <button class="chip${sFilter==='idea'?' on':''}" onclick="sFilter='idea';render()">アイデア</button>
+<input type="text" placeholder="🔍 検索..." value="${h(sSearch)}" oninput="sSearch=this.value;render()">
+<button class="chip${sFilter==='all'?' on':''}" onclick="sFilter='all';render()">すべて</button>
+<button class="chip${sFilter==='high'?' on':''}" onclick="sFilter='high';render()">優先度高</button>
+<button class="chip${sFilter==='active'?' on':''}" onclick="sFilter='active';render()">稼働中</button>
+<button class="chip${sFilter==='idea'?' on':''}" onclick="sFilter='idea';render()">アイデア</button>
 </div>
-${renderGroups(grouped, po)}
-</div>`
-    : '<div style="margin-top:1rem;padding:1rem;text-align:center;font-size:.72rem;color:var(--text3)">GitHubタブで発掘してシートに追加するとここに表示されます</div>';
-
-  return `<div class="phdr">
-<div><div class="ptitle">アイデアストック</div><div class="psub">手動アイデア + GitHub発掘リポジトリ</div></div>
-<div class="btn-row">
-  <button class="btn btn-p" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'self',priority:'high'});scheduleSave();render()">+ 自発</button>
-  <button class="btn" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'client',priority:'high'});scheduleSave();render()">+ 顧客発</button>
-</div></div>
-${searchBox}
-${list.length===0?'<div style="text-align:center;padding:1rem;font-size:.75rem;color:var(--text3)">該当なし</div>':list.map(idea=>ideaCard(idea)).join('')}
-${stockSection}`;
+<div id="thumb-grid-root"></div>
+</div>`:'<div style="margin-top:1rem;padding:1rem;text-align:center;font-size:.72rem;color:var(--text3)">GitHubタブで発掘してシートに追加するとここに表示されます</div>'}`;
 }
 
 function stockCard(r){
-  const id=r.id, isExp=expR['s_'+id];
+  const id=r.id,isExp=expR['s_'+id];
   const sm={active:'稼働中',wip:'開発中',idea:'アイデア',done:'完了'};
   const sc={active:'tg-act',wip:'tg-wip',idea:'tg-idea',done:'tg-arch'};
   const pc={high:'tg-hi',mid:'tg-mid',low:'tg-lo2'};
-
-  // 1. リンク先: homepage > GitHub Pages推測 > GitHub URL
-  const ghUser = r.url ? r.url.replace('https://github.com/','').split('/')[0] : '';
-  const repoName = r.url ? r.url.replace('https://github.com/','').split('/')[1] : '';
-  const ghPagesUrl = (ghUser && repoName) ? `https://${ghUser}.github.io/${repoName}/` : '';
-  const liveUrl = r.homepage || ghPagesUrl;
-
-  // 変更バッファ（保存ボタン押下まで反映しない）
-  const bufKey = 'buf_'+id;
-  if(!window._scBuf) window._scBuf={};
-  if(!window._scBuf[bufKey]) window._scBuf[bufKey]={group:r.group||'未分類',status:r.status||'idea',priority:r.priority||'mid',memo:r.memo||''};
-  const buf = window._scBuf[bufKey];
-
   return`<div class="rcard${isExp?' exp':''}">
-<div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}'];render()" style="cursor:pointer">
-  <span class="rname">${h(r.repo_name||'—')}</span>
-  ${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
-  <span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status}</span>
-  <span class="tag ${pc[r.priority]||'tg-lo2'}">${r.priority==='high'?'高':r.priority==='mid'?'中':'低'}</span>
-  <span style="font-size:.6rem;color:var(--text3);margin-left:auto">${isExp?'▲':'▼'}</span>
+<div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}'];render()">
+${r.url?`<a href="${r.url}" target="_blank" class="rname" style="text-decoration:none;color:var(--text);cursor:pointer" title="${h(r.url)}" onclick="event.stopPropagation()">${h(r.repo_name||'—')} <span style="font-size:.58rem;color:var(--text3)">↗</span></a>`:`<span class="rname">${h(r.repo_name||'—')}</span>`}
+${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
+<span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status}</span>
+<span class="tag ${pc[r.priority]||'tg-lo2'}">${r.priority==='high'?'高':r.priority==='mid'?'中':'低'}</span>
 </div>
 ${r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
 <div class="rdetail">
-  <div><div class="dlbl">グループ</div>
-    <select onclick="event.stopPropagation()" onchange="window._scBuf['${bufKey}'].group=this.value">
-      ${groups.map(g=>`<option value="${g}"${buf.group===g?' selected':''}>${g}</option>`).join('')}
-    </select>
-  </div>
-  <div><div class="dlbl">ステータス</div>
-    <select onclick="event.stopPropagation()" onchange="window._scBuf['${bufKey}'].status=this.value">
-      <option value="idea"${buf.status==='idea'?' selected':''}>アイデア</option>
-      <option value="wip"${buf.status==='wip'?' selected':''}>開発中</option>
-      <option value="active"${buf.status==='active'?' selected':''}>稼働中</option>
-      <option value="done"${buf.status==='done'?' selected':''}>完了</option>
-    </select>
-  </div>
-  <div><div class="dlbl">優先度</div>
-    <select onclick="event.stopPropagation()" onchange="window._scBuf['${bufKey}'].priority=this.value">
-      <option value="high"${buf.priority==='high'?' selected':''}>高</option>
-      <option value="mid"${buf.priority==='mid'?' selected':''}>中</option>
-      <option value="low"${buf.priority==='low'?' selected':''}>低</option>
-    </select>
-  </div>
-  <div><div class="dlbl">メモ</div>
-    <textarea onclick="event.stopPropagation()" oninput="window._scBuf['${bufKey}'].memo=this.value">${h(buf.memo)}</textarea>
-  </div>
-  <div style="grid-column:span 2">
-    ${liveUrl?`
-    <a href="${liveUrl}" target="_blank" onclick="event.stopPropagation()"
-      style="display:block;width:100%;text-align:center;padding:9px;margin-bottom:8px;border-radius:var(--r);background:var(--amber);color:#fff;font-size:.82rem;font-weight:500;text-decoration:none;border:none;cursor:pointer">
-      ▶ アプリを開く（${r.homepage?'公開URL':'GitHub Pages'}）
-    </a>`:'<div style="font-size:.68rem;color:var(--text3);margin-bottom:8px;padding:6px;background:var(--bg2);border-radius:var(--r);text-align:center">公開URLなし（GitHubのみ）</div>'}
-    <div class="btn-row">
-      ${r.url?`<a href="${r.url}" target="_blank" class="btn" onclick="event.stopPropagation()">GitHub コード →</a>`:''}
-      <button class="btn" style="background:var(--green);color:#fff;border-color:var(--green)"
-        onclick="event.stopPropagation();saveStockCard('${id}')">💾 保存</button>
-      <button class="btn btn-p"
-        onclick="event.stopPropagation();promoteToProject('${id}')" title="プロジェクト一覧に格上げ">⬆ PJ格上げ</button>
-      <button class="btn btn-d" onclick="event.stopPropagation();delSheet('${id}')">削除</button>
-    </div>
-  </div>
+<div><div class="dlbl">グループ</div><select onclick="event.stopPropagation()" onchange="updSheet('${id}','group',this.value)">${groups.map(g=>`<option value="${g}"${(r.group||'未分類')===g?' selected':''}>${g}</option>`).join('')}</select></div>
+<div><div class="dlbl">ステータス</div><select onclick="event.stopPropagation()" onchange="updSheet('${id}','status',this.value)"><option value="idea"${r.status==='idea'?' selected':''}>アイデア</option><option value="wip"${r.status==='wip'?' selected':''}>開発中</option><option value="active"${r.status==='active'?' selected':''}>稼働中</option><option value="done"${r.status==='done'?' selected':''}>完了</option></select></div>
+<div><div class="dlbl">優先度</div><select onclick="event.stopPropagation()" onchange="updSheet('${id}','priority',this.value)"><option value="high"${r.priority==='high'?' selected':''}>高</option><option value="mid"${r.priority==='mid'?' selected':''}>中</option><option value="low"${r.priority==='low'?' selected':''}>低</option></select></div>
+<div><div class="dlbl">メモ</div><textarea onclick="event.stopPropagation()" onchange="updSheet('${id}','memo',this.value)">${h(r.memo||'')}</textarea></div>
+<div style="grid-column:span 2"><div class="btn-row">${r.url?`<a href="${r.url}" target="_blank" class="btn" onclick="event.stopPropagation()">GitHub →</a>`:''} ${r.homepage?`<a href="${h(r.homepage)}" target="_blank" class="btn" onclick="event.stopPropagation()">公開 →</a>`:''} <button class="btn btn-d" onclick="event.stopPropagation();delSheet('${id}')">削除</button></div></div>
 </div></div>`;
 }
-
-// 2. 保存ボタン処理
-async function saveStockCard(id){
-  const bufKey='buf_'+id;
-  const buf=window._scBuf&&window._scBuf[bufKey];
-  if(!buf) return;
-  const i=sheetRepos.findIndex(r=>String(r.id)===String(id));
-  if(i>=0){
-    sheetRepos[i].group    = buf.group;
-    sheetRepos[i].status   = buf.status;
-    sheetRepos[i].priority = buf.priority;
-    sheetRepos[i].memo     = buf.memo;
-  }
-  setDot('busy','保存中...');
-  if(GAS){
-    await gasSmallWrite({action:'update_repo', id,
-      group:buf.group, status:buf.status, priority:buf.priority, memo:buf.memo});
-  }
-  setDot('ok','保存完了');
-  render();
-}
-
-// 3. PJ格上げ（アイデアストック → プロジェクト一覧）
-function promoteToProject(id){
-  const r = sheetRepos.find(x=>String(x.id)===String(id));
-  if(!r) return;
-  if(!confirm(`「${r.repo_name}」をプロジェクト一覧に格上げしますか？`)) return;
-  // 重複チェック
-  if(D.projects.find(p=>p.gh&&p.gh.includes(r.repo_name))){
-    alert('すでにプロジェクト一覧に存在します');return;
-  }
-  D.projects.unshift({
-    id:++D.nextId,
-    name:r.repo_name,
-    gh: r.url ? r.url.replace('https://github.com/','') : '',
-    user:'self', idea:'self', stock:'github',
-    rev:'free', revAmt:0,
-    status: r.status==='active'?'active':'wip',
-    progress:0,
-    client:'',
-    memo: r.description||r.memo||''
-  });
-  // シート側のステータスも更新
-  const i=sheetRepos.findIndex(x=>String(x.id)===String(id));
-  if(i>=0) sheetRepos[i].status='active';
-  if(GAS) gasSmallWrite({action:'update_repo', id, status:'active'});
-  scheduleSave();
-  tab='projects';
-  document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));
-  document.querySelectorAll('.nav').forEach(n=>{ if(n.textContent.includes('プロジェクト')) n.classList.add('on'); });
-  render();
-  alert(`✅ プロジェクト一覧に追加しました！\n「📁 プロジェクト」タブで確認・編集できます`);
-}
-
 
 function rNote(){
   return`<div class="phdr"><div><div class="ptitle">メモ・目標設定</div></div></div>
@@ -969,17 +736,278 @@ function go(t,el){
 // BOOT
 // ═══════════════════════════════════════════════════════════
 window.onload=()=>{
-  // 旧バージョンキーから移行
-  const OLD_KEYS=['hideo_os_v3','hideo_os_v2','hideo_cmd_v2','hideo_progress_v3','hideo_pos_v1'];
-  if(!localStorage.getItem(LS)){
-    for(const k of OLD_KEYS){
-      const old=localStorage.getItem(k);
-      if(old){ try{ const p=JSON.parse(old); if(p&&(p.clients||p.pipeline||p.projects)){ localStorage.setItem(LS,old); console.log('移行:',k); break; } }catch(e){} }
-    }
+  if(GAS){
+    document.getElementById('gas-url-input').value=GAS;
+    setDot('ok','GAS接続済');
+    loadGAS();
+  } else {
+    loadLocal();render();
   }
-  if(GAS){ document.getElementById('gas-url-input').value=GAS; }
-  loadGAS();
 };
+
+// ══════════════════════════════════════════
+// サムネイル & モーダル機能
+// ══════════════════════════════════════════
+function getLiveUrl(r){
+  if(r.homepage) return r.homepage;
+  var p=(r.url||'').replace('https://github.com/','').split('/');
+  return (p[0]&&p[1]) ? 'https://'+p[0]+'.github.io/'+p[1]+'/' : '';
+}
+function getThumbUrl(r){
+  var live=getLiveUrl(r);
+  return live ? 'https://image.thum.io/get/width/400/crop/280/'+live : '';
+}
+
+// サムネイルグリッドをDOMで直接構築（文字列連結のクォート問題を完全回避）
+function buildThumbGrid(items, container){
+  container.innerHTML='';
+  var grid=document.createElement('div');
+  grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;padding:4px 0';
+  items.forEach(function(r){
+    var card=document.createElement('div');
+    card.style.cssText='cursor:pointer;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg2);transition:border-color .15s';
+    card.addEventListener('mouseenter',function(){this.style.borderColor='var(--border2)';});
+    card.addEventListener('mouseleave',function(){this.style.borderColor='var(--border)';});
+    card.addEventListener('click',function(e){e.stopPropagation();openStockModal(r);});
+
+    // サムネイル
+    var thumb=document.createElement('div');
+    thumb.style.cssText='width:100%;height:90px;background:var(--bg3);overflow:hidden;position:relative';
+    var turl=getThumbUrl(r);
+    if(turl){
+      var img=document.createElement('img');
+      img.src=turl; img.loading='lazy';
+      img.style.cssText='width:100%;height:100%;object-fit:cover;object-position:top';
+      img.onerror=function(){
+        thumb.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:.58rem;color:var(--text3)">プレビューなし</div>';
+      };
+      thumb.appendChild(img);
+    } else {
+      thumb.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:.58rem;color:var(--text3)">URLなし</div>';
+    }
+    card.appendChild(thumb);
+
+    // 名前・タグ
+    var info=document.createElement('div');
+    info.style.cssText='padding:5px 7px';
+    var smap={active:'稼働中',wip:'開発中',idea:'アイデア',done:'完了'};
+    var scol={active:'tg-act',wip:'tg-wip',idea:'tg-idea',done:'tg-arch'};
+    info.innerHTML=''
+      +'<div style="font-size:.7rem;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px">'+(r.repo_name||'—')+'</div>'
+      +'<div style="display:flex;gap:3px;flex-wrap:wrap">'
+        +'<span class="tag '+(scol[r.status]||'tg-arch')+'" style="font-size:.56rem">'+(smap[r.status]||r.status)+'</span>'
+        +(r.language?'<span class="tag tg-lang" style="font-size:.56rem">'+r.language+'</span>':'')
+      +'</div>';
+    card.appendChild(info);
+    grid.appendChild(card);
+  });
+  container.appendChild(grid);
+}
+
+// グループ展開時にサムネイルグリッドを注入
+function renderThumbGroups(grouped, po, containerId){
+  var wrap=document.getElementById(containerId);
+  if(!wrap) return;
+  wrap.innerHTML='';
+  Object.keys(grouped).forEach(function(g){
+    var items=grouped[g];
+    var open=expG[g]!==false;
+    var hic=items.filter(function(r){return r.priority==='high';}).length;
+    var ac =items.filter(function(r){return r.status==='active';}).length;
+
+    var grpDiv=document.createElement('div');
+    grpDiv.className='grpwrap';
+
+    // ヘッダー
+    var head=document.createElement('div');
+    head.className='grphead';
+    head.innerHTML=''
+      +'<div style="display:flex;align-items:center;gap:7px">'
+        +'<span style="font-size:.6rem;color:var(--text3)">'+(open?'▼':'▶')+'</span>'
+        +'<span class="grpname">'+g+'</span>'
+        +'<span style="font-size:.6rem;color:var(--text3)">'+items.length+'件</span>'
+      +'</div>'
+      +'<div class="grpmeta">'
+        +(hic?'<span class="tag tg-hi">'+hic+' 高</span>':'')
+        +(ac?'<span class="tag tg-act">'+ac+' 稼働</span>':'')
+      +'</div>';
+    head.addEventListener('click',function(){
+      expG[g]=!expG[g];
+      // open/closeだけDOMで切り替え
+      var body=grpDiv.querySelector('.grp-body-inner');
+      if(expG[g]){
+        if(!body){ body=document.createElement('div'); body.className='grp-body-inner grpbody'; grpDiv.appendChild(body); }
+        buildThumbGrid(items,body);
+        head.querySelector('span').textContent='▼';
+      } else {
+        if(body) body.innerHTML='';
+        head.querySelector('span').textContent='▶';
+      }
+    });
+    grpDiv.appendChild(head);
+
+    // 展開済みなら初期表示
+    if(open){
+      var body=document.createElement('div');
+      body.className='grp-body-inner grpbody';
+      buildThumbGrid(items,body);
+      grpDiv.appendChild(body);
+    }
+    wrap.appendChild(grpDiv);
+  });
+}
+
+// ── モーダル ──────────────────────────────
+function openStockModal(r){
+  var ex=document.getElementById('stock-modal');
+  if(ex)ex.remove();
+
+  var liveUrl=getLiveUrl(r);
+  var bufKey='buf_'+r.id;
+  if(!window._scBuf)window._scBuf={};
+  if(!window._scBuf[bufKey])window._scBuf[bufKey]={
+    group:r.group||'未分類',status:r.status||'idea',
+    priority:r.priority||'mid',memo:r.memo||''
+  };
+  var buf=window._scBuf[bufKey];
+
+  var overlay=document.createElement('div');
+  overlay.id='stock-modal';
+  overlay.style.cssText='position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;padding:1rem';
+  overlay.addEventListener('click',function(e){if(e.target===overlay)closeStockModal();});
+
+  var box=document.createElement('div');
+  box.style.cssText='background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:1.25rem;width:min(480px,100%);max-height:90vh;overflow-y:auto';
+
+  // タイトル
+  var title=document.createElement('div');
+  title.style.cssText='font-size:.9rem;font-weight:500;color:var(--text);margin-bottom:.5rem';
+  title.textContent=r.repo_name||'—';
+  box.appendChild(title);
+
+  // 説明
+  if(r.description){
+    var desc=document.createElement('div');
+    desc.style.cssText='font-size:.72rem;color:var(--text2);margin-bottom:.75rem;line-height:1.5';
+    desc.textContent=r.description;
+    box.appendChild(desc);
+  }
+
+  // ▶ アプリを開くボタン
+  if(liveUrl){
+    var runBtn=document.createElement('a');
+    runBtn.href=liveUrl; runBtn.target='_blank';
+    runBtn.style.cssText='display:block;text-align:center;padding:10px;margin-bottom:.75rem;border-radius:8px;background:var(--amber);color:#fff;font-size:.82rem;font-weight:500;text-decoration:none';
+    runBtn.textContent='▶ アプリを開く';
+    box.appendChild(runBtn);
+  } else {
+    var noUrl=document.createElement('div');
+    noUrl.style.cssText='font-size:.68rem;color:var(--text3);margin-bottom:.75rem;padding:8px;background:var(--bg3);border-radius:8px;text-align:center';
+    noUrl.textContent='公開URLなし（GitHub Pagesが未設定）';
+    box.appendChild(noUrl);
+  }
+
+  // 編集フォーム
+  var grid=document.createElement('div');
+  grid.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:.75rem';
+
+  function makeField(label, el){
+    var d=document.createElement('div');
+    var lb=document.createElement('div'); lb.className='dlbl'; lb.textContent=label;
+    d.appendChild(lb); d.appendChild(el); return d;
+  }
+  function makeSelect(opts, val, onChange){
+    var s=document.createElement('select');
+    opts.forEach(function(o){
+      var op=document.createElement('option');
+      op.value=o[0]; op.textContent=o[1];
+      if(o[0]===val)op.selected=true;
+      s.appendChild(op);
+    });
+    s.addEventListener('change',function(){onChange(this.value);});
+    return s;
+  }
+
+  var grpSel=makeSelect(groups.map(function(g){return[g,g];}),buf.group,function(v){buf.group=v;});
+  var stSel=makeSelect([['idea','アイデア'],['wip','開発中'],['active','稼働中'],['done','完了']],buf.status,function(v){buf.status=v;});
+  var priSel=makeSelect([['high','高'],['mid','中'],['low','低']],buf.priority,function(v){buf.priority=v;});
+  var memoTA=document.createElement('textarea');
+  memoTA.value=buf.memo; memoTA.style.cssText='resize:none;min-height:40px';
+  memoTA.addEventListener('input',function(){buf.memo=this.value;});
+
+  grid.appendChild(makeField('グループ',grpSel));
+  grid.appendChild(makeField('ステータス',stSel));
+  grid.appendChild(makeField('優先度',priSel));
+  grid.appendChild(makeField('メモ',memoTA));
+  box.appendChild(grid);
+
+  // ボタン行
+  var btnRow=document.createElement('div');
+  btnRow.className='btn-row';
+
+  if(r.url){
+    var ghLink=document.createElement('a');
+    ghLink.href=r.url; ghLink.target='_blank'; ghLink.className='btn';
+    ghLink.textContent='GitHub →'; btnRow.appendChild(ghLink);
+  }
+
+  var saveBtn=document.createElement('button');
+  saveBtn.className='btn'; saveBtn.textContent='💾 保存';
+  saveBtn.style.cssText='background:var(--green);color:#fff;border-color:var(--green)';
+  saveBtn.addEventListener('click',function(){
+    var i=sheetRepos.findIndex(function(x){return String(x.id)===String(r.id);});
+    if(i>=0){ sheetRepos[i].group=buf.group; sheetRepos[i].status=buf.status; sheetRepos[i].priority=buf.priority; sheetRepos[i].memo=buf.memo; }
+    if(GAS) gasSmallWrite({action:'update_repo',id:r.id,group:buf.group,status:buf.status,priority:buf.priority,memo:buf.memo});
+    setDot('ok','保存完了');
+    closeStockModal(); render();
+  });
+  btnRow.appendChild(saveBtn);
+
+  var pjBtn=document.createElement('button');
+  pjBtn.className='btn btn-p'; pjBtn.textContent='⬆ PJ格上げ';
+  pjBtn.addEventListener('click',function(){
+    if(!confirm('「'+r.repo_name+'」をプロジェクト一覧に格上げしますか？'))return;
+    if(D.projects.find(function(p){return p.gh&&p.gh.includes(r.repo_name);})){alert('既にプロジェクト一覧にあります');return;}
+    var p=(r.url||'').replace('https://github.com/','').split('/');
+    D.projects.unshift({id:++D.nextId,name:r.repo_name,gh:p[0]&&p[1]?p[0]+'/'+p[1]:'',
+      user:'self',idea:'self',stock:'github',rev:'free',revAmt:0,
+      status:'wip',progress:0,client:'',memo:r.description||''});
+    scheduleSave();
+    closeStockModal();
+    tab='projects';
+    document.querySelectorAll('.nav').forEach(function(n){n.classList.remove('on');});
+    document.querySelectorAll('.nav').forEach(function(n){if(n.textContent.includes('プロジェクト'))n.classList.add('on');});
+    render();
+  });
+  btnRow.appendChild(pjBtn);
+
+  var delBtn=document.createElement('button');
+  delBtn.className='btn btn-d'; delBtn.textContent='削除';
+  delBtn.addEventListener('click',function(){
+    if(!confirm('削除しますか？'))return;
+    sheetIds.delete(String(r.id));
+    sheetRepos=sheetRepos.filter(function(x){return String(x.id)!==String(r.id);});
+    if(GAS)gasSmallWrite({action:'delete_repo',id:r.id});
+    closeStockModal(); render();
+  });
+  btnRow.appendChild(delBtn);
+
+  var closeBtn=document.createElement('button');
+  closeBtn.className='btn'; closeBtn.textContent='✕ 閉じる';
+  closeBtn.style.marginLeft='auto';
+  closeBtn.addEventListener('click',closeStockModal);
+  btnRow.appendChild(closeBtn);
+
+  box.appendChild(btnRow);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+}
+
+function closeStockModal(){
+  var m=document.getElementById('stock-modal');
+  if(m)m.remove();
+}
+
 </script>
 </body>
 </html>
