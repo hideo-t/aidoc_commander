@@ -797,6 +797,25 @@ function go(t,el){
 // BOOT
 // ═══════════════════════════════════════════════════════════
 window.onload=()=>{
+  // 旧バージョンのキーからデータを移行
+  const OLD_KEYS = ['hideo_os_v3','hideo_os_v2','hideo_os_v1','hideo_cmd_v2','hideo_progress_v3'];
+  const cur = localStorage.getItem(LS);
+  if(!cur){
+    for(const k of OLD_KEYS){
+      const old = localStorage.getItem(k);
+      if(old){
+        try{
+          const parsed = JSON.parse(old);
+          // 旧データが有効なオブジェクトかチェック
+          if(parsed && (parsed.clients||parsed.pipeline||parsed.projects)){
+            localStorage.setItem(LS, old);
+            console.log('旧データ移行完了:', k);
+            break;
+          }
+        }catch(e){}
+      }
+    }
+  }
   if(GAS){
     document.getElementById('gas-url-input').value=GAS;
     setDot('ok','GAS接続済');
