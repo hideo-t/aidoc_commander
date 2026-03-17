@@ -235,7 +235,6 @@ let addForm = {name:'',gh:'',user:'self',idea:'self',stock:'github',rev:'free',r
 let fP = {search:'',user:'',rev:'',status:''};   // project filter
 let rFilter = 'gem'; let rSearch = '';
 let sFilter = 'all'; let sSearch = '';
-let iSearch = ''; let iSort = 'priority'; let iSrc = '';
 let fetched = []; let sheetRepos = []; let sheetIds = new Set();
 let groups = ['未分類','AI・Bot','収益化候補','横展開可能','顧客向け','個人プロジェクト','アーカイブ'];
 let saveTimer = null;
@@ -277,47 +276,51 @@ let D = JSON.parse(JSON.stringify(DEF));
 // GAS & STORAGE
 // ═══════════════════════════════════════════════════════════
 function setDot(s,m){document.getElementById('dot').className='dot'+(s==='ok'?' ok':s==='err'?' err':s==='busy'?' busy':'');document.getElementById('gas-lbl').textContent=m;}
-
-// ── GAS通信 ─────────────────────────────────────────────
-async function gasGet(p){
-  const r=await fetch(GAS+'?'+new URLSearchParams(p));
+async function gasGet(p){const r=await fetch(GAS+'?'+new URLSearchParams(p));return r.json();}
+async function gasPost(b){
+  // GASはPOSTのCORSリダイレクトが問題になるためGETパラメータ経由で送信
+  const url=GAS+'?payload='+encodeURIComponent(JSON.stringify(b));
+  const r=await fetch(url);
   return r.json();
 }
-// no-cors で送りっぱなし（CORSリダイレクト完全回避）
-function gasWrite(b){
-  if(!GAS)return;
-  fetch(GAS+'?'+new URLSearchParams({payload:JSON.stringify(b)}),{mode:'no-cors'}).catch(()=>{});
-}
 
-// ── 保存: localStorage主 + GAS従 ────────────────────────
-function loadLocal(){try{const r=localStorage.getItem(LS);if(r)D=JSON.parse(r);}catch(e){}}
-function saveLocal(){try{localStorage.setItem(LS,JSON.stringify(D));}catch(e){}}
-
-function scheduleSave(){
-  saveLocal();
-  if(saveTimer)clearTimeout(saveTimer);
-  saveTimer=setTimeout(()=>{
-    if(GAS){
-      gasWrite({key:DK,value:D});
-      const t=new Date();
-      setDot('ok',`同期済 ${t.getHours()}:${String(t.getMinutes()).padStart(2,'0')}`);
+function loadLocal(){
+  try{
+    const r=localStorage.getItem(LS);
+    if(r){
+      const parsed=JSON.parse(r);
+      // 各配列が必ず存在するようにマージ
+      D=Object.assign(JSON.parse(JSON.stringify(DEF)), parsed);
+      D.pipeline  = Array.isArray(parsed.pipeline)  ? parsed.pipeline  : DEF.pipeline;
+      D.clients   = Array.isArray(parsed.clients)   ? parsed.clients   : DEF.clients;
+      D.mrr       = Array.isArray(parsed.mrr)        ? parsed.mrr       : DEF.mrr;
+      D.projects  = Array.isArray(parsed.projects)  ? parsed.projects  : DEF.projects;
+      D.ideas     = Array.isArray(parsed.ideas)      ? parsed.ideas     : DEF.ideas;
+      D.goals     = parsed.goals   || DEF.goals;
+      D.note      = parsed.note    || DEF.note;
+      D.nextId    = parsed.nextId  || DEF.nextId;
     }
-  },2000);
+  }catch(e){ console.error('loadLocal error:', e); }
 }
-function manualSave(){
+function saveLocal(){try{localStorage.setItem(LS,JSON.stringify(D));}catch(e){}}
+async function saveGAS(){
   saveLocal();
-  if(GAS){gasWrite({key:DK,value:D});setDot('ok','同期リクエスト送信');}
-  else setDot('','ローカル保存済');
+  if(!GAS)return;
+  setDot('busy','保存中...');
+  try{const r=await gasPost({key:DK,value:D});setDot(r.status==='ok'?'ok':'err',r.status==='ok'?`保存済 ${new Date().getHours()}:${String(new Date().getMinutes()).padStart(2,'0')}`:'保存失敗');}
+  catch(e){setDot('err','通信エラー');}
 }
+function scheduleSave(){if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(saveGAS,3000);}
+function manualSave(){saveGAS();}
 
 async function loadGAS(){
   if(!GAS){loadLocal();render();return;}
   setDot('busy','読込中...');
   try{
     const r=await gasGet({key:DK});
-    if(r.status==='ok'&&r.value){D=JSON.parse(r.value);setDot('ok','GAS読込済');}
-    else{loadLocal();setDot('ok','GAS接続済');}
-  }catch(e){loadLocal();setDot('ok','ローカルデータ使用');}
+    if(r.status==='ok'&&r.value){D=JSON.parse(r.value);setDot('ok','GAS接続済');}
+    else{loadLocal();setDot('ok','GAS接続済（新規）');}
+  }catch(e){loadLocal();setDot('err','GASエラー→ローカル');}
   render();
   loadSheetRepos();
 }
@@ -339,47 +342,12 @@ async function loadSheetRepos(){
 function connectGASSide(){
   const url=document.getElementById('gas-url-input').value.trim();
   if(!url||!url.includes('script.google.com')){alert('GAS URLを正しく入力してください');return;}
-  GAS=url;localStorage.setItem(GK,GAS);
-  setDot('busy','接続確認中...');
+  GAS=url;localStorage.setItem(GK,GAS);setDot('ok','GAS接続済');
   loadGAS();
 }
 
-async function pushSheet(repos){
-  if(!GAS){alert('GAS URLを設定してください');return;}
-  gasWrite({action:'add_repos',repos});
-  repos.forEach(r=>{
-    if(!sheetIds.has(String(r.id))){
-      sheetIds.add(String(r.id));
-      sheetRepos.push({
-        id:r.id,repo_name:r.name,description:r.description||'',
-        language:r.language||'',url:r.html_url||'',homepage:r.homepage||'',
-        stars:r.stargazers_count||0,size_kb:r.size||0,
-        days_since_push:r.daysSincePush||0,score:r.score||0,
-        gem_reason:r.gemReason||'',group:r.group||'未分類',
-        priority:r.priority||'mid',status:'idea',memo:r.memo||''
-      });
-    }
-  });
-  sel.clear();
-  setDot('ok','追加リクエスト送信（数秒後にSpreadsheetに反映）');
-  render();
-}
-
-async function delSheet(id){
-  if(!confirm('削除しますか？'))return;
-  if(GAS)gasWrite({action:'delete_repo',id});
-  sheetIds.delete(String(id));
-  sheetRepos=sheetRepos.filter(x=>String(x.id)!==String(id));
-  render();
-}
-
-async function updSheet(id,field,val){
-  const i=sheetRepos.findIndex(r=>String(r.id)===String(id));
-  if(i>=0)sheetRepos[i][field]=val;
-  if(GAS)gasWrite({action:'update_repo',id,[field]:val});
-}
-
-setInterval(()=>{if(GAS&&D.clients)gasWrite({key:DK,value:D});},90000);
+// Auto-save every 60s
+setInterval(saveGAS,60000);
 
 // ═══════════════════════════════════════════════════════════
 // MAPS & HELPERS
@@ -395,9 +363,9 @@ const STAGES={lead:'リード',approach:'アプローチ',zoom:'Zoom予定',prop
 const SK=Object.keys(STAGES);
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 
-function calcMRR(){return D.clients.reduce((s,c)=>s+(c.fee||0),0);}
-function calcCR(){const w=D.pipeline.filter(p=>p.stage==='won').length,t=D.pipeline.filter(p=>['zoom','proposal','won'].includes(p.stage)).length;return t>0?Math.round(w/t*100):null;}
-function pct(){return Math.min(100,Math.round(D.clients.length/D.goals.clients*100));}
+function calcMRR(){return (D.clients||[]).reduce((s,c)=>s+(c.fee||0),0);}
+function calcCR(){const w=(D.pipeline||[]).filter(p=>p.stage==='won').length,t=(D.pipeline||[]).filter(p=>['zoom','proposal','won'].includes(p.stage)).length;return t>0?Math.round(w/t*100):null;}
+function pct(){return Math.min(100,Math.round((D.clients||[]).length/D.goals.clients*100));}
 function tago(d){if(d<1)return'今日';if(d<7)return d+'日前';if(d<30)return Math.round(d/7)+'週前';if(d<365)return Math.round(d/30)+'ヶ月前';return Math.round(d/365)+'年前';}
 function h(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function tagP(p){return[
@@ -408,7 +376,7 @@ function tagP(p){return[
 ].join('');}
 
 function fProjects(){
-  return D.projects.filter(p=>{
+  return (D.projects||[]).filter(p=>{
     if(fP.search){const q=fP.search.toLowerCase();if(!p.name.toLowerCase().includes(q)&&!p.memo.toLowerCase().includes(q)&&!(p.client||'').toLowerCase().includes(q))return false;}
     if(fP.user&&p.user!==fP.user)return false;
     if(fP.rev&&p.rev!==fP.rev)return false;
@@ -417,7 +385,7 @@ function fProjects(){
   });
 }
 function getVisible(){
-  let list=fetched.filter(r=>!r.fork);
+  let list=(fetched||[]).filter(r=>!r.fork);
   if(rFilter==='gem')list=list.filter(r=>r.isGem);
   if(rFilter==='bur')list=list.filter(r=>r.daysSincePush>=180&&r.daysSincePush<730&&r.size>30);
   if(rFilter==='new')list=list.filter(r=>!sheetIds.has(String(r.id)));
@@ -429,7 +397,7 @@ function getVisible(){
 // ACTIONS
 // ═══════════════════════════════════════════════════════════
 function updP(id,k,v){const i=D.projects.findIndex(p=>p.id===id);if(i>=0)D.projects[i][k]=v;scheduleSave();}
-function remP(id){D.projects=D.projects.filter(p=>p.id!==id);delete expP[id];scheduleSave();render();}
+function remP(id){D.projects=(D.projects||[]).filter(p=>p.id!==id);delete expP[id];scheduleSave();render();}
 function addProject(){
   if(!addForm.name.trim())return;
   D.projects.unshift({...addForm,id:++D.nextId,progress:0});
@@ -456,7 +424,7 @@ function advance(id){
 function ideaToPJ(i){
   const idea=D.ideas[i];
   D.projects.unshift({id:++D.nextId,name:idea.text,gh:'',user:'self',idea:idea.src,stock:'github',rev:'free',revAmt:0,status:'idea',progress:0,client:'',memo:'アイデアから昇格'});
-  D.ideas.splice(i,1);tab='projects';scheduleSave();render();
+  (D.ideas||[]).splice(i,1);tab='projects';scheduleSave();render();
 }
 
 // GitHub
@@ -511,7 +479,34 @@ async function doFetch(){
   document.getElementById('fbtn').disabled=false;
   render();
 }
-
+async function pushSheet(repos){
+  if(!GAS){alert('GAS URLを設定してください');return;}
+  setDot('busy','保存中...');
+  try{
+    const r=await gasPost({action:'add_repos',repos});
+    if(r.status==='ok'){
+      repos.forEach(x=>sheetIds.add(String(x.id)));sel.clear();
+      setDot('ok',`+${r.added}件追加`);
+      await loadSheetRepos();render();
+    }else setDot('err',r.message||'追加失敗');
+  }catch(e){setDot('err','通信エラー');}
+}
+async function delSheet(id){
+  if(!GAS||!confirm('削除しますか？'))return;
+  setDot('busy','削除中...');
+  try{
+    const r=await gasPost({action:'delete_repo',id});
+    if(r.status==='ok'){sheetIds.delete(String(id));sheetRepos=sheetRepos.filter(x=>String(x.id)!==String(id));setDot('ok','削除完了');render();}
+  }catch(e){setDot('err','通信エラー');}
+}
+async function updSheet(id,field,val){
+  const i=sheetRepos.findIndex(r=>String(r.id)===String(id));
+  if(i>=0)sheetRepos[i][field]=val;
+  if(!GAS)return;
+  setDot('busy','更新中...');
+  try{const r=await gasPost({action:'update_repo',id,[field]:val});setDot(r.status==='ok'?'ok':'err',r.status==='ok'?'更新完了':'更新失敗');}
+  catch(e){setDot('err','通信エラー');}
+}
 function selAll(){getVisible().forEach(r=>sel.add(String(r.id)));render();}
 function clrSel(){sel.clear();render();}
 function toggleSel(id){sel.has(id)?sel.delete(id):sel.add(id);render();}
@@ -522,7 +517,7 @@ function addGrp(){const n=document.getElementById('ngrp').value.trim();if(!n||gr
 // ═══════════════════════════════════════════════════════════
 function rOverview(){
   const mrr=calcMRR(),cr=calcCR(),p=pct();
-  const pot=D.pipeline.filter(x=>x.stage!=='won').reduce((s,x)=>s+(x.fee||0),0);
+  const pot=(D.pipeline||[]).filter(x=>x.stage!=='won').reduce((s,x)=>s+(x.fee||0),0);
   const gap={c:Math.max(0,D.goals.clients-D.clients.length),m:Math.max(0,D.goals.mrr-mrr)};
   const maxV=Math.max(...D.mrr.map(m=>m.v),mrr,1);
   return`<div class="phdr"><div><div class="ptitle">ダッシュボード</div><div class="psub">AIの町医者 独立目標管理</div></div></div>
@@ -530,7 +525,7 @@ function rOverview(){
   <div class="stat"><div class="sv" style="color:var(--green)">${D.clients.length}件</div><div class="sl">確定クライアント</div><div class="ss">目標${D.goals.clients}件</div></div>
   <div class="stat"><div class="sv" style="color:var(--green)">${mrr}万</div><div class="sl">確定MRR</div><div class="ss">目標${D.goals.mrr}万円</div></div>
   <div class="stat"><div class="sv" style="color:${cr!==null?'var(--amber)':'var(--text3)'}">${cr!==null?cr+'%':'未計測'}</div><div class="sl">Zoom成約率</div><div class="ss">${D.pipeline.length}件進行中</div></div>
-  <div class="stat"><div class="sv" style="color:var(--blue)">${pot}万</div><div class="sl">潜在パイプラインMRR</div><div class="ss">${D.pipeline.filter(p=>p.stage!=='won').length}件</div></div>
+  <div class="stat"><div class="sv" style="color:var(--blue)">${pot}万</div><div class="sl">潜在パイプラインMRR</div><div class="ss">${(D.pipeline||[]).filter(p=>p.stage!=='won').length}件</div></div>
 </div>
 <div class="gbar">
   <div class="gtop"><span>達成度 ${D.clients.length}/${D.goals.clients}件 (${p}%)</span><span>MRR ${mrr}/${D.goals.mrr}万</span></div>
@@ -538,26 +533,26 @@ function rOverview(){
   <div class="gnote">あと${gap.c}件・¥${gap.m}万 ${cr?'— '+Math.ceil(gap.c/Math.max(20*0.5*cr/100,.1))+'ヶ月予測':'— 成約率データ待ち'}</div>
 </div>
 <div class="card"><div class="ctitle">月次MRR推移</div>
-${D.mrr.map((m,i)=>`<div class="mrow"><div class="mlbl">${m.m}</div><div class="mbg"><div class="mbar" style="width:${Math.round(m.v/maxV*100)}%;background:${i===D.mrr.length-1?'var(--green)':'rgba(255,255,255,.15)'}"></div></div><input class="minput" type="number" value="${m.v}" oninput="D.mrr[${i}].v=parseFloat(this.value)||0;scheduleSave()">万<button class="btn btn-d" style="padding:1px 5px" onclick="D.mrr.splice(${i},1);scheduleSave();render()">✕</button></div>`).join('')}
+${(D.mrr||[]).map((m,i)=>`<div class="mrow"><div class="mlbl">${m.m}</div><div class="mbg"><div class="mbar" style="width:${Math.round(m.v/maxV*100)}%;background:${i===D.mrr.length-1?'var(--green)':'rgba(255,255,255,.15)'}"></div></div><input class="minput" type="number" value="${m.v}" oninput="D.mrr[${i}].v=parseFloat(this.value)||0;scheduleSave()">万<button class="btn btn-d" style="padding:1px 5px" onclick="D.mrr.splice(${i},1);scheduleSave();render()">✕</button></div>`).join('')}
 <button class="btn" style="margin-top:5px;font-size:.65rem" onclick="addMo()">+ 月追加</button></div>
 <div class="card"><div class="ctitle">確定クライアント</div>
 <table class="tbl"><thead><tr><th>名前</th><th>業種</th><th style="text-align:right">月額(万)</th><th>開始</th><th>メモ</th><th></th></tr></thead><tbody>
-${D.clients.map((c,i)=>`<tr><td><input value="${h(c.name)}" oninput="D.clients[${i}].name=this.value;scheduleSave()"></td><td><input value="${h(c.type||'')}" oninput="D.clients[${i}].type=this.value"></td><td><input type="number" value="${c.fee||0}" oninput="D.clients[${i}].fee=parseFloat(this.value)||0;scheduleSave()" style="width:55px;text-align:right"></td><td><input value="${h(c.since||'')}" oninput="D.clients[${i}].since=this.value" style="width:65px" placeholder="yyyy-mm"></td><td><input value="${h(c.memo||'')}" oninput="D.clients[${i}].memo=this.value"></td><td><button class="btn btn-d" style="padding:1px 5px" onclick="D.clients.splice(${i},1);scheduleSave();render()">✕</button></td></tr>`).join('')}
+${(D.clients||[]).map((c,i)=>`<tr><td><input value="${h(c.name)}" oninput="D.clients[${i}].name=this.value;scheduleSave()"></td><td><input value="${h(c.type||'')}" oninput="D.clients[${i}].type=this.value"></td><td><input type="number" value="${c.fee||0}" oninput="D.clients[${i}].fee=parseFloat(this.value)||0;scheduleSave()" style="width:55px;text-align:right"></td><td><input value="${h(c.since||'')}" oninput="D.clients[${i}].since=this.value" style="width:65px" placeholder="yyyy-mm"></td><td><input value="${h(c.memo||'')}" oninput="D.clients[${i}].memo=this.value"></td><td><button class="btn btn-d" style="padding:1px 5px" onclick="D.clients.splice(${i},1);scheduleSave();render()">✕</button></td></tr>`).join('')}
 </tbody></table>
 <button class="btn" style="margin-top:5px" onclick="D.clients.push({id:++D.nextId,name:'',type:'',fee:0,since:'',memo:''});render()">+ 追加</button></div>`;
 }
 
 function rPipeline(){
   return`<div class="phdr"><div><div class="ptitle">商談パイプライン</div><div class="psub">リード → 成約 の管理</div></div><button class="btn btn-p" onclick="D.pipeline.push({id:++D.nextId,name:'',stage:'lead',date:'',fee:10,memo:''});render()">+ 追加</button></div>
-<div class="kanban">${SK.map(sk=>{const items=D.pipeline.filter(p=>p.stage===sk);return`<div class="kcol"><div class="khead"><span>${STAGES[sk]}</span><span>${items.length}</span></div>${items.map(p=>`<div class="kcard" onclick="advance(${p.id})"><div class="kname">${h(p.name)||'—'}</div>${p.date?`<div class="kdate">${h(p.date)}</div>`:''}<div class="kmeta"><span class="tag tg-sub" style="font-size:9px">¥${p.fee}万</span><span style="font-size:9px;color:var(--text3)">↗</span></div></div>`).join('')}</div>`;}).join('')}</div>
+<div class="kanban">${SK.map(sk=>{const items=(D.pipeline||[]).filter(p=>p.stage===sk);return`<div class="kcol"><div class="khead"><span>${STAGES[sk]}</span><span>${items.length}</span></div>${items.map(p=>`<div class="kcard" onclick="advance(${p.id})"><div class="kname">${h(p.name)||'—'}</div>${p.date?`<div class="kdate">${h(p.date)}</div>`:''}<div class="kmeta"><span class="tag tg-sub" style="font-size:9px">¥${p.fee}万</span><span style="font-size:9px;color:var(--text3)">↗</span></div></div>`).join('')}</div>`;}).join('')}</div>
 <div class="card"><div class="ctitle">詳細</div><table class="tbl"><thead><tr><th>名前</th><th>ステージ</th><th>日程</th><th style="text-align:right">月額(万)</th><th>メモ</th><th></th></tr></thead><tbody>
-${D.pipeline.map((p,i)=>`<tr><td><input value="${h(p.name)}" oninput="D.pipeline[${i}].name=this.value;scheduleSave()"></td><td><select oninput="D.pipeline[${i}].stage=this.value;scheduleSave();render()">${SK.map(sk=>`<option value="${sk}"${p.stage===sk?' selected':''}>${STAGES[sk]}</option>`).join('')}</select></td><td><input value="${h(p.date||'')}" oninput="D.pipeline[${i}].date=this.value" style="width:75px"></td><td><input type="number" value="${p.fee||0}" oninput="D.pipeline[${i}].fee=parseFloat(this.value)||0" style="text-align:right;width:48px"></td><td><input value="${h(p.memo||'')}" oninput="D.pipeline[${i}].memo=this.value"></td><td><button class="btn btn-d" style="padding:1px 5px" onclick="D.pipeline.splice(${i},1);scheduleSave();render()">✕</button></td></tr>`).join('')}
+${(D.pipeline||[]).map((p,i)=>`<tr><td><input value="${h(p.name)}" oninput="D.pipeline[${i}].name=this.value;scheduleSave()"></td><td><select oninput="D.pipeline[${i}].stage=this.value;scheduleSave();render()">${SK.map(sk=>`<option value="${sk}"${p.stage===sk?' selected':''}>${STAGES[sk]}</option>`).join('')}</select></td><td><input value="${h(p.date||'')}" oninput="D.pipeline[${i}].date=this.value" style="width:75px"></td><td><input type="number" value="${p.fee||0}" oninput="D.pipeline[${i}].fee=parseFloat(this.value)||0" style="text-align:right;width:48px"></td><td><input value="${h(p.memo||'')}" oninput="D.pipeline[${i}].memo=this.value"></td><td><button class="btn btn-d" style="padding:1px 5px" onclick="D.pipeline.splice(${i},1);scheduleSave();render()">✕</button></td></tr>`).join('')}
 </tbody></table></div>`;
 }
 
 function rProjects(){
   const fp=fProjects();
-  const st={active:D.projects.filter(p=>p.status==='active').length,wip:D.projects.filter(p=>p.status==='wip').length,idea:D.projects.filter(p=>p.status==='idea').length,arch:D.projects.filter(p=>p.status==='archive').length};
+  const st={active:(D.projects||[]).filter(p=>p.status==='active').length,wip:(D.projects||[]).filter(p=>p.status==='wip').length,idea:(D.projects||[]).filter(p=>p.status==='idea').length,arch:(D.projects||[]).filter(p=>p.status==='archive').length};
   return`<div class="phdr"><div><div class="ptitle">プロジェクト一覧</div><div class="psub">${D.projects.length}件登録 / GitHub 230+リポジトリ</div></div><button class="btn btn-p" onclick="showAdd=!showAdd;render()">+ 追加</button></div>
 <div class="stats" style="grid-template-columns:repeat(4,1fr)"><div class="stat"><div class="sv" style="color:var(--green)">${st.active}</div><div class="sl">稼働中</div></div><div class="stat"><div class="sv" style="color:var(--amber)">${st.wip}</div><div class="sl">開発中</div></div><div class="stat"><div class="sv" style="color:var(--purple)">${st.idea}</div><div class="sl">アイデア</div></div><div class="stat"><div class="sv" style="color:var(--text3)">${st.arch}</div><div class="sl">アーカイブ</div></div></div>
 ${showAdd?`<div class="addform"><div class="addgrid">
@@ -598,10 +593,10 @@ ${fP.search||fP.user||fP.rev||fP.status?`<button class="chip" onclick="fP={searc
 }
 
 function rRevenue(){
-  const subs=D.projects.filter(p=>p.rev==='sub'&&p.revAmt>0);
+  const subs=(D.projects||[]).filter(p=>p.rev==='sub'&&p.revAmt>0);
   const tot=subs.reduce((s,p)=>s+(p.revAmt||0),0);
-  const onces=D.projects.filter(p=>p.rev==='once');
-  const frees=D.projects.filter(p=>p.rev==='free'&&p.status==='active');
+  const onces=(D.projects||[]).filter(p=>p.rev==='once');
+  const frees=(D.projects||[]).filter(p=>p.rev==='free'&&p.status==='active');
   return`<div class="phdr"><div><div class="ptitle">収益管理</div></div></div>
 <div class="revgrid">
 <div class="revcrd"><div style="font-size:.65rem;color:var(--text3)">サブスク月次MRR</div><div class="revval">¥${(tot/10000).toFixed(1)}万/月</div>${subs.map(p=>`<div class="revitem"><span>${h(p.name)}</span><span style="color:var(--green)">¥${(p.revAmt/10000).toFixed(1)}万</span></div>`).join('')}${!subs.length?'<div style="font-size:.65rem;color:var(--text3)">サブスク収益なし</div>':''}</div>
@@ -670,81 +665,36 @@ ${isExp&&r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
 }
 
 function rIdeas(){
+  const dIdeas=(D.ideas||[]);
   const allRep=sheetRepos;
+  const hi=dIdeas.filter(i=>i.priority==='high'),mi=dIdeas.filter(i=>i.priority==='mid'),lo=dIdeas.filter(i=>i.priority==='low');
+  const sec=(lbl,list,col)=>list.length===0?'':
+    `<div class="stxt" style="color:${col};margin:10px 0 5px">${lbl}（${list.length}）</div>${list.map(idea=>{const gi=dIdeas.indexOf(idea);return`<div class="idearow"><span class="tag${idea.src==='client'?' tg-u':' tg-idea'}">${idea.src==='client'?'顧客発':'自発'}</span><div class="ideatxt"><input value="${h(idea.text)}" oninput="D.ideas[${gi}].text=this.value;scheduleSave()"></div><select onchange="D.ideas[${gi}].priority=this.value;scheduleSave();render()"><option value="high"${idea.priority==='high'?' selected':''}>高</option><option value="mid"${idea.priority==='mid'?' selected':''}>中</option><option value="low"${idea.priority==='low'?' selected':''}>低</option></select><button class="btn" style="padding:2px 6px;font-size:.62rem" onclick="ideaToPJ(${gi})">→PJ化</button><button class="btn btn-d" style="padding:2px 5px" onclick="(D.ideas||[]).splice(${gi},1);scheduleSave();render()">✕</button></div>`;}).join('')}`;
 
-  // 手動アイデアの検索・フィルタ・並び替え
-  let list=[...D.ideas];
-  if(iSearch){const q=iSearch.toLowerCase();list=list.filter(i=>i.text.toLowerCase().includes(q));}
-  if(iSrc)list=list.filter(i=>i.src===iSrc);
-  const po={high:0,mid:1,low:2};
-  if(iSort==='priority')list.sort((a,b)=>(po[a.priority]||1)-(po[b.priority]||1));
-  else if(iSort==='newest')list.sort((a,b)=>b.id-a.id);
-  else if(iSort==='text')list.sort((a,b)=>a.text.localeCompare(b.text,'ja'));
-  else if(iSort==='src')list.sort((a,b)=>a.src.localeCompare(b.src));
-
-  const ideaCard=(idea)=>{
-    const gi=D.ideas.indexOf(idea);
-    const pc={high:'tg-hi',mid:'tg-mid',low:'tg-lo2'};
-    const priLabel={high:'🔴 高',mid:'🟡 中',low:'⬜ 低'};
-    return`<div class="idearow">
-<span class="tag${idea.src==='client'?' tg-u':' tg-idea'}">${idea.src==='client'?'顧客発':'自発'}</span>
-<div class="ideatxt"><input value="${h(idea.text)}" oninput="D.ideas[${gi}].text=this.value;scheduleSave()"></div>
-<span class="tag ${pc[idea.priority]}" style="cursor:pointer;user-select:none" title="クリックで変更"
-  onclick="const o=['high','mid','low'];const i=o.indexOf(D.ideas[${gi}].priority);D.ideas[${gi}].priority=o[(i+1)%3];scheduleSave();render()">${priLabel[idea.priority]||'⬜'}</span>
-<button class="btn" style="padding:2px 6px;font-size:.62rem" onclick="ideaToPJ(${gi})">→PJ化</button>
-<button class="btn btn-d" style="padding:2px 5px" onclick="D.ideas.splice(${gi},1);scheduleSave();render()">✕</button>
-</div>`;
-  };
-
-  // Sheet repos
-  let slist=[...allRep];
+  // Sheet repos grouped
+  let slist=allRep;
   if(sSearch){const q=sSearch.toLowerCase();slist=slist.filter(r=>(r.repo_name||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q)||(r.memo||'').toLowerCase().includes(q));}
   if(sFilter==='high')slist=slist.filter(r=>r.priority==='high');
   if(sFilter==='active')slist=slist.filter(r=>r.status==='active');
   if(sFilter==='idea')slist=slist.filter(r=>r.status==='idea');
   const grouped={};slist.forEach(r=>{const g=r.group||'未分類';if(!grouped[g])grouped[g]=[];grouped[g].push(r);});
-  Object.keys(grouped).forEach(g=>grouped[g].sort((a,b)=>(po[a.priority]||1)-(po[b.priority]||1)));
+  const po={high:0,mid:1,low:2};Object.keys(grouped).forEach(g=>grouped[g].sort((a,b)=>(po[a.priority]||1)-(po[b.priority]||1)));
 
-  return`<div class="phdr">
-<div><div class="ptitle">アイデアストック</div><div class="psub">手動アイデア + GitHub発掘リポジトリ</div></div>
-<div class="btn-row">
-  <button class="btn btn-p" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'self',priority:'high'});render()">+ 自発</button>
-  <button class="btn" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'client',priority:'high'});render()">+ 顧客発</button>
-</div></div>
-
-<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);padding:10px 12px;margin-bottom:.75rem">
-  <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-    <input type="text" value="${h(iSearch)}" placeholder="🔍 アイデアを検索..."
-      oninput="iSearch=this.value;render()"
-      style="flex:1;min-width:140px;font-size:.72rem;padding:5px 9px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none">
-    <button class="chip${iSrc===''?' on':''}" onclick="iSrc='';render()">すべて</button>
-    <button class="chip${iSrc==='self'?' on':''}" onclick="iSrc=iSrc==='self'?'':'self';render()">自発</button>
-    <button class="chip${iSrc==='client'?' on':''}" onclick="iSrc=iSrc==='client'?'':'client';render()">顧客発</button>
-  </div>
-  <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
-    <span style="font-size:.62rem;color:var(--text3)">並び替え:</span>
-    ${[['priority','優先度'],['newest','新しい順'],['text','テキスト順'],['src','種別']].map(([k,l])=>`<button class="chip${iSort===k?' on':''}" onclick="iSort='${k}';render()" style="font-size:.62rem;padding:2px 8px">${l}</button>`).join('')}
-    <span style="margin-left:auto;font-size:.62rem;font-family:var(--mono);color:var(--text3)">${list.length}件 / 全${D.ideas.length}件</span>
-  </div>
-</div>
-
-${list.length===0
-  ?'<div style="text-align:center;padding:1rem;font-size:.75rem;color:var(--text3)">該当なし</div>'
-  :list.map(idea=>ideaCard(idea)).join('')}
-
+  return`<div class="phdr"><div><div class="ptitle">アイデアストック</div><div class="psub">手動アイデア + GitHub発掘リポジトリ</div></div><div class="btn-row"><button class="btn btn-p" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'self',priority:'high'});render()">+ 自発</button><button class="btn" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'client',priority:'high'});render()">+ 顧客発</button></div></div>
+${sec('🔴 優先度高',hi,'var(--red)')}${sec('🟡 優先度中',mi,'var(--amber)')}${sec('⬜ 優先度低',lo,'var(--text3)')}
 ${allRep.length>0?`
 <div style="margin:1.25rem 0 .75rem;border-top:1px solid var(--border);padding-top:1rem">
 <div class="ctitle" style="margin-bottom:.75rem">📊 GitHubストック（Spreadsheet）<span style="font-size:.6rem;color:var(--text3);font-weight:300;margin-left:6px">${allRep.length}件</span></div>
 <div class="addgrp"><input type="text" id="ngrp" placeholder="新しいグループ名..."><button class="btn btn-g" onclick="addGrp()">+ グループ</button><button class="btn" onclick="loadSheetRepos().then(()=>render())">🔄 再読込</button></div>
 <div class="fbar">
-  <input type="text" placeholder="🔍 検索..." value="${h(sSearch)}" oninput="sSearch=this.value;render()">
-  <button class="chip${sFilter==='all'?' on':''}" onclick="sFilter='all';render()">すべて</button>
-  <button class="chip${sFilter==='high'?' on':''}" onclick="sFilter='high';render()">優先度高</button>
-  <button class="chip${sFilter==='active'?' on':''}" onclick="sFilter='active';render()">稼働中</button>
-  <button class="chip${sFilter==='idea'?' on':''}" onclick="sFilter='idea';render()">アイデア</button>
+<input type="text" placeholder="🔍 検索..." value="${h(sSearch)}" oninput="sSearch=this.value;render()">
+<button class="chip${sFilter==='all'?' on':''}" onclick="sFilter='all';render()">すべて</button>
+<button class="chip${sFilter==='high'?' on':''}" onclick="sFilter='high';render()">優先度高</button>
+<button class="chip${sFilter==='active'?' on':''}" onclick="sFilter='active';render()">稼働中</button>
+<button class="chip${sFilter==='idea'?' on':''}" onclick="sFilter='idea';render()">アイデア</button>
 </div>
 ${Object.keys(grouped).map(g=>{const items=grouped[g],open=expG[g]!==false;const hic=items.filter(r=>r.priority==='high').length,ac=items.filter(r=>r.status==='active').length;
-return\`<div class="grpwrap"><div class="grphead" onclick="expG['\${g}']=!expG['\${g}'];render()"><div style="display:flex;align-items:center;gap:7px"><span style="font-size:.6rem;color:var(--text3)">\${open?'▼':'▶'}</span><span class="grpname">\${h(g)}</span><span style="font-size:.6rem;color:var(--text3)">\${items.length}件</span></div><div class="grpmeta">\${hic?\`<span class="tag tg-hi">\${hic} 高</span>\`:''} \${ac?\`<span class="tag tg-act">\${ac} 稼働</span>\`:''}</div></div>\${open?\`<div class="grpbody">\${items.map(r=>stockCard(r)).join('')}</div>\`:''}</div>\`;}).join('')}
+return`<div class="grpwrap"><div class="grphead" onclick="expG['${g}']=!expG['${g}'];render()"><div style="display:flex;align-items:center;gap:7px"><span style="font-size:.6rem;color:var(--text3)">${open?'▼':'▶'}</span><span class="grpname">${h(g)}</span><span style="font-size:.6rem;color:var(--text3)">${items.length}件</span></div><div class="grpmeta">${hic?`<span class="tag tg-hi">${hic} 高</span>`:''} ${ac?`<span class="tag tg-act">${ac} 稼働</span>`:''}</div></div>${open?`<div class="grpbody">${items.map(r=>stockCard(r)).join('')}</div>`:''}</div>`;}).join('')}
 </div>`:'<div style="margin-top:1rem;padding:1rem;text-align:center;font-size:.72rem;color:var(--text3)">GitHubタブで発掘してシートに追加するとここに表示されます</div>'}`;
 }
 
@@ -755,7 +705,7 @@ function stockCard(r){
   const pc={high:'tg-hi',mid:'tg-mid',low:'tg-lo2'};
   return`<div class="rcard${isExp?' exp':''}">
 <div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}'];render()">
-${(r.homepage||r.url)?`<a href="${r.homepage||r.url}" target="_blank" class="rname" style="text-decoration:none;color:var(--text);cursor:pointer" title="${h(r.homepage||r.url||'')}" onclick="event.stopPropagation()">${h(r.repo_name||'—')} <span style="font-size:.58rem;color:var(--text3)">${r.homepage?'🌐↗':'⌥↗'}</span></a>`:`<span class="rname">${h(r.repo_name||'—')}</span>`}
+${r.url?`<a href="${r.url}" target="_blank" class="rname" style="text-decoration:none;color:var(--text);cursor:pointer" title="${h(r.url)}" onclick="event.stopPropagation()">${h(r.repo_name||'—')} <span style="font-size:.58rem;color:var(--text3)">↗</span></a>`:`<span class="rname">${h(r.repo_name||'—')}</span>`}
 ${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
 <span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status}</span>
 <span class="tag ${pc[r.priority]||'tg-lo2'}">${r.priority==='high'?'高':r.priority==='mid'?'中':'低'}</span>
@@ -766,7 +716,7 @@ ${r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
 <div><div class="dlbl">ステータス</div><select onclick="event.stopPropagation()" onchange="updSheet('${id}','status',this.value)"><option value="idea"${r.status==='idea'?' selected':''}>アイデア</option><option value="wip"${r.status==='wip'?' selected':''}>開発中</option><option value="active"${r.status==='active'?' selected':''}>稼働中</option><option value="done"${r.status==='done'?' selected':''}>完了</option></select></div>
 <div><div class="dlbl">優先度</div><select onclick="event.stopPropagation()" onchange="updSheet('${id}','priority',this.value)"><option value="high"${r.priority==='high'?' selected':''}>高</option><option value="mid"${r.priority==='mid'?' selected':''}>中</option><option value="low"${r.priority==='low'?' selected':''}>低</option></select></div>
 <div><div class="dlbl">メモ</div><textarea onclick="event.stopPropagation()" onchange="updSheet('${id}','memo',this.value)">${h(r.memo||'')}</textarea></div>
-<div style="grid-column:span 2"><div class="btn-row">${r.homepage?`<a href="${h(r.homepage)}" target="_blank" class="btn btn-g" onclick="event.stopPropagation()">🌐 公開ページ →</a>`:''} ${r.url?`<a href="${r.url}" target="_blank" class="btn" onclick="event.stopPropagation()">GitHub →</a>`:''} <button class="btn btn-d" onclick="event.stopPropagation();delSheet('${id}')">削除</button></div></div>
+<div style="grid-column:span 2"><div class="btn-row">${r.url?`<a href="${r.url}" target="_blank" class="btn" onclick="event.stopPropagation()">GitHub →</a>`:''} ${r.homepage?`<a href="${h(r.homepage)}" target="_blank" class="btn" onclick="event.stopPropagation()">公開 →</a>`:''} <button class="btn btn-d" onclick="event.stopPropagation();delSheet('${id}')">削除</button></div></div>
 </div></div>`;
 }
 
@@ -797,8 +747,13 @@ function go(t,el){
 // BOOT
 // ═══════════════════════════════════════════════════════════
 window.onload=()=>{
-  // 旧バージョンのキーからデータを移行
-  const OLD_KEYS = ['hideo_os_v3','hideo_os_v2','hideo_os_v1','hideo_cmd_v2','hideo_progress_v3'];
+  // ── 旧バージョンからのデータ移行 ──────────────────────
+  // v2/v3で使われていた可能性のある全キーを試みる
+  const OLD_KEYS = [
+    'hideo_os_v3','hideo_os_v2','hideo_os_v1',
+    'hideo_cmd_v2','hideo_progress_v3','hideo_progress_v2',
+    'hideo_pos_v1','hideo_os_main'
+  ];
   const cur = localStorage.getItem(LS);
   if(!cur){
     for(const k of OLD_KEYS){
@@ -806,16 +761,18 @@ window.onload=()=>{
       if(old){
         try{
           const parsed = JSON.parse(old);
-          // 旧データが有効なオブジェクトかチェック
-          if(parsed && (parsed.clients||parsed.pipeline||parsed.projects)){
+          if(parsed && typeof parsed === 'object' &&
+             (parsed.clients||parsed.pipeline||parsed.projects||parsed.goals)){
             localStorage.setItem(LS, old);
-            console.log('旧データ移行完了:', k);
+            console.log('[移行完了]', k, '→', LS);
             break;
           }
-        }catch(e){}
+        }catch(e){ console.warn('[移行スキップ]', k, e); }
       }
     }
   }
+
+  // GAS上のデータも確認（GAS側に最新データがある場合はそちら優先）
   if(GAS){
     document.getElementById('gas-url-input').value=GAS;
     setDot('ok','GAS接続済');
@@ -823,7 +780,50 @@ window.onload=()=>{
   } else {
     loadLocal();render();
   }
+
+  // ── 手動インポートボタンをサイドバーに追加 ────────────
+  const sb = document.querySelector('.side-bottom');
+  if(sb){
+    const imp = document.createElement('button');
+    imp.className='nav';
+    imp.style.cssText='font-size:.62rem;color:var(--text3)';
+    imp.textContent='📥 データ手動インポート';
+    imp.onclick=manualImport;
+    sb.appendChild(imp);
+  }
 };
+
+// ── 手動インポート（旧データをlocalStorageキー指定で移行）──
+function manualImport(){
+  const key = prompt(
+    '旧バージョンのlocalStorageキーを入力してください\n\n' +
+    '候補: hideo_os_v3 / hideo_cmd_v2 / hideo_progress_v3 / hideo_pos_v1\n\n' +
+    '※ブラウザのDevTools(F12) → Application → Local Storage で確認できます'
+  );
+  if(!key) return;
+  const raw = localStorage.getItem(key);
+  if(!raw){ alert('キー「' + key + '」にデータが見つかりませんでした'); return; }
+  try{
+    const parsed = JSON.parse(raw);
+    if(!parsed || typeof parsed !== 'object'){
+      alert('データの形式が不正です');return;
+    }
+    // 現在のデータとマージ（配列チェック付き）
+    D.clients  = Array.isArray(parsed.clients)  && parsed.clients.length  ? parsed.clients  : D.clients;
+    D.pipeline = Array.isArray(parsed.pipeline) && parsed.pipeline.length ? parsed.pipeline : D.pipeline;
+    D.projects = Array.isArray(parsed.projects) && parsed.projects.length ? parsed.projects : D.projects;
+    D.ideas    = Array.isArray(parsed.ideas)    && parsed.ideas.length    ? parsed.ideas    : D.ideas;
+    D.mrr      = Array.isArray(parsed.mrr)      && parsed.mrr.length      ? parsed.mrr      : D.mrr;
+    if(parsed.goals)  D.goals  = parsed.goals;
+    if(parsed.note)   D.note   = parsed.note;
+    if(parsed.nextId) D.nextId = parsed.nextId;
+    scheduleSave();
+    render();
+    alert('✅ インポート完了！\nクライアント:'+D.clients.length+'件 パイプライン:'+D.pipeline.length+'件 プロジェクト:'+D.projects.length+'件');
+  }catch(e){
+    alert('解析エラー: ' + e.message);
+  }
+}
 </script>
 </body>
 </html>
