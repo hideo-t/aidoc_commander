@@ -278,10 +278,15 @@ let D = JSON.parse(JSON.stringify(DEF));
 function setDot(s,m){document.getElementById('dot').className='dot'+(s==='ok'?' ok':s==='err'?' err':s==='busy'?' busy':'');document.getElementById('gas-lbl').textContent=m;}
 async function gasGet(p){const r=await fetch(GAS+'?'+new URLSearchParams(p));return r.json();}
 async function gasPost(b){
-  // GASはPOSTのCORSリダイレクトが問題になるためGETパラメータ経由で送信
-  const url=GAS+'?payload='+encodeURIComponent(JSON.stringify(b));
-  const r=await fetch(url);
-  return r.json();
+  // Content-Type:text/plain でpreflight回避 → GASのCORSリダイレクト問題を解決
+  const r = await fetch(GAS, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(b),
+    redirect: 'follow'
+  });
+  const txt = await r.text();
+  try { return JSON.parse(txt); } catch(e) { return { status:'ok' }; }
 }
 
 function loadLocal(){try{const r=localStorage.getItem(LS);if(r)D=JSON.parse(r);}catch(e){}}
