@@ -277,7 +277,12 @@ let D = JSON.parse(JSON.stringify(DEF));
 // ═══════════════════════════════════════════════════════════
 function setDot(s,m){document.getElementById('dot').className='dot'+(s==='ok'?' ok':s==='err'?' err':s==='busy'?' busy':'');document.getElementById('gas-lbl').textContent=m;}
 async function gasGet(p){const r=await fetch(GAS+'?'+new URLSearchParams(p));return r.json();}
-async function gasPost(b){const r=await fetch(GAS,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});return r.json();}
+async function gasPost(b){
+  // GASはPOSTのCORSリダイレクトが問題になるためGETパラメータ経由で送信
+  const url=GAS+'?payload='+encodeURIComponent(JSON.stringify(b));
+  const r=await fetch(url);
+  return r.json();
+}
 
 function loadLocal(){try{const r=localStorage.getItem(LS);if(r)D=JSON.parse(r);}catch(e){}}
 function saveLocal(){try{localStorage.setItem(LS,JSON.stringify(D));}catch(e){}}
