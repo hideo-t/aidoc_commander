@@ -233,7 +233,6 @@ let showAdd = false;
 let sel   = new Set();
 let addForm = {name:'',gh:'',user:'self',idea:'self',stock:'github',rev:'free',revAmt:0,status:'wip',client:'',memo:''};
 let fP = {search:'',user:'',rev:'',status:''};   // project filter
-let iSearch='';let iSort='priority';let iSrc='';
 let rFilter = 'gem'; let rSearch = '';
 let sFilter = 'all'; let sSearch = '';
 let fetched = []; let sheetRepos = []; let sheetIds = new Set();
@@ -649,29 +648,27 @@ ${isExp&&r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
 }
 
 function rIdeas(){
-  const allRep=sheetRepos;
   const dIdeas=D.ideas;
+  const allRep=sheetRepos;
   const hi=dIdeas.filter(i=>i.priority==='high'),mi=dIdeas.filter(i=>i.priority==='mid'),lo=dIdeas.filter(i=>i.priority==='low');
   const sec=(lbl,list,col)=>list.length===0?'':
     `<div class="stxt" style="color:${col};margin:10px 0 5px">${lbl}（${list.length}）</div>${list.map(idea=>{const gi=dIdeas.indexOf(idea);return`<div class="idearow"><span class="tag${idea.src==='client'?' tg-u':' tg-idea'}">${idea.src==='client'?'顧客発':'自発'}</span><div class="ideatxt"><input value="${h(idea.text)}" oninput="D.ideas[${gi}].text=this.value;scheduleSave()"></div><select onchange="D.ideas[${gi}].priority=this.value;scheduleSave();render()"><option value="high"${idea.priority==='high'?' selected':''}>高</option><option value="mid"${idea.priority==='mid'?' selected':''}>中</option><option value="low"${idea.priority==='low'?' selected':''}>低</option></select><button class="btn" style="padding:2px 6px;font-size:.62rem" onclick="ideaToPJ(${gi})">→PJ化</button><button class="btn btn-d" style="padding:2px 5px" onclick="D.ideas.splice(${gi},1);scheduleSave();render()">✕</button></div>`;}).join('')}`;
 
+  // Sheet repos grouped
   let slist=allRep;
-  if(sSearch){const q=sSearch.toLowerCase();slist=slist.filter(r=>(r.repo_name||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q));}
-  if(sFilter==='high')   slist=slist.filter(r=>r.priority==='high');
-  if(sFilter==='active') slist=slist.filter(r=>r.status==='active');
-  if(sFilter==='idea')   slist=slist.filter(r=>r.status==='idea');
+  if(sSearch){const q=sSearch.toLowerCase();slist=slist.filter(r=>(r.repo_name||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q)||(r.memo||'').toLowerCase().includes(q));}
+  if(sFilter==='high')slist=slist.filter(r=>r.priority==='high');
+  if(sFilter==='active')slist=slist.filter(r=>r.status==='active');
+  if(sFilter==='idea')slist=slist.filter(r=>r.status==='idea');
   const po={high:0,mid:1,low:2};
   const grouped={};
   slist.forEach(r=>{const g=r.group||'未分類';if(!grouped[g])grouped[g]=[];grouped[g].push(r);});
   Object.keys(grouped).forEach(g=>grouped[g].sort((a,b)=>(po[a.priority]||1)-(po[b.priority]||1)));
 
   // render後にDOM操作でサムネイルグリッドを注入
-  setTimeout(function(){
-    var root=document.getElementById('thumb-grid-root');
-    if(root) renderThumbGroups(grouped,po,'thumb-grid-root');
-  },0);
+  setTimeout(function(){ buildGroupedThumbs(grouped,'_tgr'); },0);
 
-  return `<div class="phdr"><div><div class="ptitle">アイデアストック</div><div class="psub">手動アイデア + GitHub発掘リポジトリ</div></div><div class="btn-row"><button class="btn btn-p" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'self',priority:'high'});render()">+ 自発</button><button class="btn" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'client',priority:'high'});render()">+ 顧客発</button></div></div>
+  return`<div class="phdr"><div><div class="ptitle">アイデアストック</div><div class="psub">手動アイデア + GitHub発掘リポジトリ</div></div><div class="btn-row"><button class="btn btn-p" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'self',priority:'high'});render()">+ 自発</button><button class="btn" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'client',priority:'high'});render()">+ 顧客発</button></div></div>
 ${sec('🔴 優先度高',hi,'var(--red)')}${sec('🟡 優先度中',mi,'var(--amber)')}${sec('⬜ 優先度低',lo,'var(--text3)')}
 ${allRep.length>0?`<div style="margin:1.25rem 0 .75rem;border-top:1px solid var(--border);padding-top:1rem">
 <div class="ctitle" style="margin-bottom:.75rem">📊 GitHubストック（Spreadsheet）<span style="font-size:.6rem;color:var(--text3);margin-left:6px">${allRep.length}件</span></div>
@@ -683,7 +680,7 @@ ${allRep.length>0?`<div style="margin:1.25rem 0 .75rem;border-top:1px solid var(
 <button class="chip${sFilter==='active'?' on':''}" onclick="sFilter='active';render()">稼働中</button>
 <button class="chip${sFilter==='idea'?' on':''}" onclick="sFilter='idea';render()">アイデア</button>
 </div>
-<div id="thumb-grid-root"></div>
+<div id="_tgr"></div>
 </div>`:'<div style="margin-top:1rem;padding:1rem;text-align:center;font-size:.72rem;color:var(--text3)">GitHubタブで発掘してシートに追加するとここに表示されます</div>'}`;
 }
 
@@ -746,95 +743,106 @@ window.onload=()=>{
 };
 
 // ══════════════════════════════════════════
-// サムネイル & モーダル機能
+// サムネイル キャッシュ & モーダル
 // ══════════════════════════════════════════
 
-// ── サムネイルキャッシュ（localStorage・7日間） ──
-const TC_KEY = 'hideo_tc';
-const TC_TTL = 7*24*60*60*1000;
-function tcGet(){ try{return JSON.parse(localStorage.getItem(TC_KEY)||'{}');}catch(e){return {};} }
+// 7日キャッシュ
+var TC='hideo_tc', TC_TTL=7*24*3600*1000;
+function tcGet(){try{return JSON.parse(localStorage.getItem(TC)||'{}');}catch(e){return{};}}
 function tcSet(c){
-  try{ localStorage.setItem(TC_KEY,JSON.stringify(c)); }
+  try{localStorage.setItem(TC,JSON.stringify(c));}
   catch(e){
-    // 容量超過 → 古い半分を削除
     try{
-      var ent=Object.entries(c).sort(function(a,b){return a[1].ts-b[1].ts;});
-      var h={};
-      ent.slice(Math.floor(ent.length/2)).forEach(function(x){h[x[0]]=x[1];});
-      localStorage.setItem(TC_KEY,JSON.stringify(h));
+      var ent=Object.entries(c).sort(function(a,b){return a[1].t-b[1].t;});
+      var h={};ent.slice(Math.floor(ent.length/2)).forEach(function(x){h[x[0]]=x[1];});
+      localStorage.setItem(TC,JSON.stringify(h));
     }catch(e2){}
   }
 }
 
 function getLiveUrl(r){
-  if(r.homepage) return r.homepage;
+  if(r.homepage)return r.homepage;
   var p=(r.url||'').replace('https://github.com/','').split('/');
-  return (p[0]&&p[1]) ? 'https://'+p[0]+'.github.io/'+p[1]+'/' : '';
+  return (p[0]&&p[1])?'https://'+p[0]+'.github.io/'+p[1]+'/':'';
 }
-function thumbUrl(r){ return getThumbUrl(r); }
 function getThumbUrl(r){
-  var base=getLiveUrl(r);
-  return base?'https://image.thum.io/get/width/400/crop/280/'+base:'';
+  var b=getLiveUrl(r);
+  return b?'https://image.thum.io/get/width/400/crop/280/'+b:'';
 }
 
-// サムネイルグリッドをDOMで直接構築（文字列連結のクォート問題を完全回避）
+// キャッシュ付き画像ロード
+function loadThumbImg(img,turl){
+  var now=Date.now(), c=tcGet();
+  if(c[turl]&&(now-c[turl].t)<TC_TTL){img.src=c[turl].d;return;}
+  img.src=turl;
+  img.crossOrigin='anonymous';
+  img.addEventListener('load',function(){
+    try{
+      var cv=document.createElement('canvas');
+      cv.width=img.naturalWidth||400;cv.height=img.naturalHeight||280;
+      cv.getContext('2d').drawImage(img,0,0);
+      var c2=tcGet();c2[turl]={d:cv.toDataURL('image/jpeg',0.7),t:now};tcSet(c2);
+    }catch(e){
+      var c2=tcGet();c2[turl]={d:turl,t:now};tcSet(c2);
+    }
+  },{once:true});
+}
+
+// サムネイルグリッドをDOMで構築
 function buildThumbGrid(items, container){
   container.innerHTML='';
   var grid=document.createElement('div');
-  grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;padding:4px 0';
+  grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;padding:4px 2px';
   items.forEach(function(r){
+    var turl=getThumbUrl(r);
+    var smap={active:'稼働中',wip:'開発中',idea:'アイデア',done:'完了'};
+    var scol={active:'tg-act',wip:'tg-wip',idea:'tg-idea',done:'tg-arch'};
+
+    // カード
     var card=document.createElement('div');
     card.style.cssText='cursor:pointer;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg2);transition:border-color .15s';
-    card.addEventListener('mouseenter',function(){this.style.borderColor='var(--border2)';});
-    card.addEventListener('mouseleave',function(){this.style.borderColor='var(--border)';});
-    card.addEventListener('click',function(e){e.stopPropagation();openStockModal(r);});
+    card.onmouseenter=function(){this.style.borderColor='rgba(255,255,255,.25)';};
+    card.onmouseleave=function(){this.style.borderColor='var(--border)';};
+    card.onclick=function(e){e.stopPropagation();openStockModal(r);};
 
-    // サムネイル
-    var thumb=document.createElement('div');
-    thumb.style.cssText='width:100%;height:90px;background:var(--bg3);overflow:hidden;position:relative';
-    var turl=getThumbUrl(r);
-    var img=document.createElement('img');
-    img.style.cssText='width:100%;height:100%;object-fit:cover;object-position:top;display:block';
-    var noPreview=document.createElement('div');
-    noPreview.style.cssText='display:none;align-items:center;justify-content:center;height:100%;font-size:.58rem;color:var(--text3);position:absolute;inset:0';
-    noPreview.textContent=turl?'読込中...':'URLなし';
-    thumb.style.position='relative';
-    thumb.appendChild(img);
-    thumb.appendChild(noPreview);
+    // サムネイルエリア
+    var tbox=document.createElement('div');
+    tbox.style.cssText='width:100%;height:90px;background:var(--bg3);overflow:hidden;position:relative';
     if(turl){
+      var img=document.createElement('img');
+      img.style.cssText='width:100%;height:100%;object-fit:cover;object-position:top';
       img.onerror=function(){
-        img.style.display='none';
-        noPreview.style.display='flex';
-        noPreview.textContent='プレビューなし';
+        this.style.display='none';
+        tbox.innerHTML+='<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.58rem;color:var(--text3)">プレビューなし</div>';
       };
-      loadThumbCached(img, turl);
+      loadThumbImg(img,turl);
+      tbox.appendChild(img);
     } else {
-      img.style.display='none';
-      noPreview.style.display='flex';
+      tbox.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:.58rem;color:var(--text3)">URLなし</div>';
     }
-    card.appendChild(thumb);
+    card.appendChild(tbox);
 
     // 名前・タグ
     var info=document.createElement('div');
     info.style.cssText='padding:5px 7px';
-    var smap={active:'稼働中',wip:'開発中',idea:'アイデア',done:'完了'};
-    var scol={active:'tg-act',wip:'tg-wip',idea:'tg-idea',done:'tg-arch'};
-    info.innerHTML=''
-      +'<div style="font-size:.7rem;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px">'+(r.repo_name||'—')+'</div>'
-      +'<div style="display:flex;gap:3px;flex-wrap:wrap">'
-        +'<span class="tag '+(scol[r.status]||'tg-arch')+'" style="font-size:.56rem">'+(smap[r.status]||r.status)+'</span>'
-        +(r.language?'<span class="tag tg-lang" style="font-size:.56rem">'+r.language+'</span>':'')
-      +'</div>';
+    var nm=document.createElement('div');
+    nm.style.cssText='font-size:.7rem;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px';
+    nm.textContent=r.repo_name||'—';
+    var tags=document.createElement('div');
+    tags.style.cssText='display:flex;gap:3px;flex-wrap:wrap';
+    tags.innerHTML='<span class="tag '+(scol[r.status]||'tg-arch')+'" style="font-size:.56rem">'+(smap[r.status]||r.status)+'</span>'
+      +(r.language?'<span class="tag tg-lang" style="font-size:.56rem">'+r.language+'</span>':'');
+    info.appendChild(nm);info.appendChild(tags);
     card.appendChild(info);
     grid.appendChild(card);
   });
   container.appendChild(grid);
 }
 
-// グループ展開時にサムネイルグリッドを注入
-function renderThumbGroups(grouped, po, containerId){
+// グループ折りたたみ付きサムネイルグリッド
+function buildGroupedThumbs(grouped, containerId){
   var wrap=document.getElementById(containerId);
-  if(!wrap) return;
+  if(!wrap)return;
   wrap.innerHTML='';
   Object.keys(grouped).forEach(function(g){
     var items=grouped[g];
@@ -842,198 +850,151 @@ function renderThumbGroups(grouped, po, containerId){
     var hic=items.filter(function(r){return r.priority==='high';}).length;
     var ac =items.filter(function(r){return r.status==='active';}).length;
 
-    var grpDiv=document.createElement('div');
-    grpDiv.className='grpwrap';
+    var gw=document.createElement('div');gw.className='grpwrap';
 
-    // ヘッダー
-    var head=document.createElement('div');
-    head.className='grphead';
-    head.innerHTML=''
-      +'<div style="display:flex;align-items:center;gap:7px">'
-        +'<span style="font-size:.6rem;color:var(--text3)">'+(open?'▼':'▶')+'</span>'
+    // ヘッダー（クリックで開閉）
+    var head=document.createElement('div');head.className='grphead';
+    head.innerHTML=
+      '<div style="display:flex;align-items:center;gap:7px">'
+        +'<span class="arr" style="font-size:.6rem;color:var(--text3)">'+(open?'▼':'▶')+'</span>'
         +'<span class="grpname">'+g+'</span>'
         +'<span style="font-size:.6rem;color:var(--text3)">'+items.length+'件</span>'
       +'</div>'
       +'<div class="grpmeta">'
         +(hic?'<span class="tag tg-hi">'+hic+' 高</span>':'')
-        +(ac?'<span class="tag tg-act">'+ac+' 稼働</span>':'')
+        +(ac ?'<span class="tag tg-act">'+ac+' 稼働</span>':'')
       +'</div>';
-    head.addEventListener('click',function(){
-      expG[g]=!expG[g];
-      // open/closeだけDOMで切り替え
-      var body=grpDiv.querySelector('.grp-body-inner');
-      if(expG[g]){
-        if(!body){ body=document.createElement('div'); body.className='grp-body-inner grpbody'; grpDiv.appendChild(body); }
-        buildThumbGrid(items,body);
-        head.querySelector('span').textContent='▼';
-      } else {
-        if(body) body.innerHTML='';
-        head.querySelector('span').textContent='▶';
-      }
-    });
-    grpDiv.appendChild(head);
 
-    // 展開済みなら初期表示
-    if(open){
-      var body=document.createElement('div');
-      body.className='grp-body-inner grpbody';
-      buildThumbGrid(items,body);
-      grpDiv.appendChild(body);
-    }
-    wrap.appendChild(grpDiv);
+    var body=document.createElement('div');
+    body.className='grpbody';
+    if(!open)body.style.display='none';
+    else buildThumbGrid(items,body);
+
+    head.onclick=function(){
+      expG[g]=!expG[g];
+      head.querySelector('.arr').textContent=expG[g]?'▼':'▶';
+      if(expG[g]){body.style.display='';buildThumbGrid(items,body);}
+      else{body.style.display='none';body.innerHTML='';}
+    };
+    gw.appendChild(head);gw.appendChild(body);
+    wrap.appendChild(gw);
   });
 }
 
-// ── モーダル ──────────────────────────────
+// ── モーダル ──────────────────────────────────────────────
 function openStockModal(r){
-  var ex=document.getElementById('stock-modal');
-  if(ex)ex.remove();
-
+  var ex=document.getElementById('_sm');if(ex)ex.remove();
   var liveUrl=getLiveUrl(r);
-  var bufKey='buf_'+r.id;
-  if(!window._scBuf)window._scBuf={};
-  if(!window._scBuf[bufKey])window._scBuf[bufKey]={
-    group:r.group||'未分類',status:r.status||'idea',
-    priority:r.priority||'mid',memo:r.memo||''
-  };
-  var buf=window._scBuf[bufKey];
+  var bk='_b'+r.id;
+  if(!window._sb)window._sb={};
+  if(!window._sb[bk])window._sb[bk]={group:r.group||'未分類',status:r.status||'idea',priority:r.priority||'mid',memo:r.memo||''};
+  var buf=window._sb[bk];
 
-  var overlay=document.createElement('div');
-  overlay.id='stock-modal';
-  overlay.style.cssText='position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;padding:1rem';
-  overlay.addEventListener('click',function(e){if(e.target===overlay)closeStockModal();});
+  var ov=document.createElement('div');
+  ov.id='_sm';
+  ov.style.cssText='position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;padding:1rem';
+  ov.onclick=function(e){if(e.target===ov)closeStockModal();};
 
   var box=document.createElement('div');
-  box.style.cssText='background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:1.25rem;width:min(480px,100%);max-height:90vh;overflow-y:auto';
+  box.style.cssText='background:var(--bg2);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:1.25rem;width:min(480px,100%);max-height:90vh;overflow-y:auto';
+  box.onclick=function(e){e.stopPropagation();};
 
   // タイトル
-  var title=document.createElement('div');
-  title.style.cssText='font-size:.9rem;font-weight:500;color:var(--text);margin-bottom:.5rem';
-  title.textContent=r.repo_name||'—';
-  box.appendChild(title);
+  var ttl=document.createElement('div');
+  ttl.style.cssText='font-size:.9rem;font-weight:500;color:var(--text);margin-bottom:.4rem';
+  ttl.textContent=r.repo_name||'—';box.appendChild(ttl);
 
   // 説明
   if(r.description){
-    var desc=document.createElement('div');
-    desc.style.cssText='font-size:.72rem;color:var(--text2);margin-bottom:.75rem;line-height:1.5';
-    desc.textContent=r.description;
-    box.appendChild(desc);
+    var dsc=document.createElement('div');
+    dsc.style.cssText='font-size:.7rem;color:var(--text2);margin-bottom:.75rem;line-height:1.5';
+    dsc.textContent=r.description;box.appendChild(dsc);
   }
 
-  // ▶ アプリを開くボタン
+  // ▶ アプリを開く
   if(liveUrl){
-    var runBtn=document.createElement('a');
-    runBtn.href=liveUrl; runBtn.target='_blank';
-    runBtn.style.cssText='display:block;text-align:center;padding:10px;margin-bottom:.75rem;border-radius:8px;background:var(--amber);color:#fff;font-size:.82rem;font-weight:500;text-decoration:none';
-    runBtn.textContent='▶ アプリを開く';
-    box.appendChild(runBtn);
+    var runA=document.createElement('a');
+    runA.href=liveUrl;runA.target='_blank';
+    runA.style.cssText='display:block;text-align:center;padding:10px;margin-bottom:.75rem;border-radius:8px;background:var(--amber);color:#fff;font-size:.82rem;font-weight:500;text-decoration:none';
+    runA.textContent='▶ アプリを開く'+(r.homepage?' (公開URL)':' (GitHub Pages)');
+    box.appendChild(runA);
   } else {
-    var noUrl=document.createElement('div');
-    noUrl.style.cssText='font-size:.68rem;color:var(--text3);margin-bottom:.75rem;padding:8px;background:var(--bg3);border-radius:8px;text-align:center';
-    noUrl.textContent='公開URLなし（GitHub Pagesが未設定）';
-    box.appendChild(noUrl);
+    var noU=document.createElement('div');
+    noU.style.cssText='font-size:.68rem;color:var(--text3);margin-bottom:.75rem;padding:7px;background:var(--bg3);border-radius:8px;text-align:center';
+    noU.textContent='公開URLなし（GitHub Pagesが未設定）';box.appendChild(noU);
   }
 
-  // 編集フォーム
-  var grid=document.createElement('div');
-  grid.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:.75rem';
-
-  function makeField(label, el){
-    var d=document.createElement('div');
-    var lb=document.createElement('div'); lb.className='dlbl'; lb.textContent=label;
-    d.appendChild(lb); d.appendChild(el); return d;
-  }
-  function makeSelect(opts, val, onChange){
+  // フォーム
+  function mkSel(opts,val,cb){
     var s=document.createElement('select');
-    opts.forEach(function(o){
-      var op=document.createElement('option');
-      op.value=o[0]; op.textContent=o[1];
-      if(o[0]===val)op.selected=true;
-      s.appendChild(op);
-    });
-    s.addEventListener('change',function(){onChange(this.value);});
-    return s;
+    opts.forEach(function(o){var op=document.createElement('option');op.value=o[0];op.textContent=o[1];if(o[0]===val)op.selected=true;s.appendChild(op);});
+    s.onchange=function(){cb(this.value);};return s;
   }
-
-  var grpSel=makeSelect(groups.map(function(g){return[g,g];}),buf.group,function(v){buf.group=v;});
-  var stSel=makeSelect([['idea','アイデア'],['wip','開発中'],['active','稼働中'],['done','完了']],buf.status,function(v){buf.status=v;});
-  var priSel=makeSelect([['high','高'],['mid','中'],['low','低']],buf.priority,function(v){buf.priority=v;});
+  function mkField(lbl,el){
+    var d=document.createElement('div');
+    var l=document.createElement('div');l.className='dlbl';l.textContent=lbl;
+    d.appendChild(l);d.appendChild(el);return d;
+  }
+  var fg=document.createElement('div');
+  fg.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:.75rem';
+  var grpSel=mkSel(groups.map(function(g){return[g,g];}),buf.group,function(v){buf.group=v;});
+  var stSel=mkSel([['idea','アイデア'],['wip','開発中'],['active','稼働中'],['done','完了']],buf.status,function(v){buf.status=v;});
+  var priSel=mkSel([['high','高'],['mid','中'],['low','低']],buf.priority,function(v){buf.priority=v;});
   var memoTA=document.createElement('textarea');
-  memoTA.value=buf.memo; memoTA.style.cssText='resize:none;min-height:40px';
-  memoTA.addEventListener('input',function(){buf.memo=this.value;});
-
-  grid.appendChild(makeField('グループ',grpSel));
-  grid.appendChild(makeField('ステータス',stSel));
-  grid.appendChild(makeField('優先度',priSel));
-  grid.appendChild(makeField('メモ',memoTA));
-  box.appendChild(grid);
+  memoTA.value=buf.memo;memoTA.style.cssText='resize:none;min-height:40px;width:100%;font-size:.72rem;padding:4px 7px;border:1px solid var(--border);border-radius:8px;background:var(--bg3);color:var(--text);outline:none;font-family:inherit';
+  memoTA.oninput=function(){buf.memo=this.value;};
+  fg.appendChild(mkField('グループ',grpSel));
+  fg.appendChild(mkField('ステータス',stSel));
+  fg.appendChild(mkField('優先度',priSel));
+  fg.appendChild(mkField('メモ',memoTA));
+  box.appendChild(fg);
 
   // ボタン行
-  var btnRow=document.createElement('div');
-  btnRow.className='btn-row';
-
+  var br=document.createElement('div');br.className='btn-row';
   if(r.url){
-    var ghLink=document.createElement('a');
-    ghLink.href=r.url; ghLink.target='_blank'; ghLink.className='btn';
-    ghLink.textContent='GitHub →'; btnRow.appendChild(ghLink);
+    var ghA=document.createElement('a');ghA.href=r.url;ghA.target='_blank';ghA.className='btn';ghA.textContent='GitHub →';br.appendChild(ghA);
   }
-
-  var saveBtn=document.createElement('button');
-  saveBtn.className='btn'; saveBtn.textContent='💾 保存';
-  saveBtn.style.cssText='background:var(--green);color:#fff;border-color:var(--green)';
-  saveBtn.addEventListener('click',function(){
+  // 保存
+  var sv=document.createElement('button');sv.className='btn';sv.textContent='💾 保存';
+  sv.style.cssText='background:var(--green);color:#fff;border-color:var(--green)';
+  sv.onclick=function(){
     var i=sheetRepos.findIndex(function(x){return String(x.id)===String(r.id);});
-    if(i>=0){ sheetRepos[i].group=buf.group; sheetRepos[i].status=buf.status; sheetRepos[i].priority=buf.priority; sheetRepos[i].memo=buf.memo; }
-    if(GAS) gasSmallWrite({action:'update_repo',id:r.id,group:buf.group,status:buf.status,priority:buf.priority,memo:buf.memo});
-    setDot('ok','保存完了');
-    closeStockModal(); render();
-  });
-  btnRow.appendChild(saveBtn);
-
-  var pjBtn=document.createElement('button');
-  pjBtn.className='btn btn-p'; pjBtn.textContent='⬆ PJ格上げ';
-  pjBtn.addEventListener('click',function(){
+    if(i>=0){sheetRepos[i].group=buf.group;sheetRepos[i].status=buf.status;sheetRepos[i].priority=buf.priority;sheetRepos[i].memo=buf.memo;}
+    if(GAS)gasSmallWrite({action:'update_repo',id:r.id,group:buf.group,status:buf.status,priority:buf.priority,memo:buf.memo});
+    setDot('ok','保存完了');closeStockModal();render();
+  };br.appendChild(sv);
+  // PJ格上げ
+  var pj=document.createElement('button');pj.className='btn btn-p';pj.textContent='⬆ PJ格上げ';
+  pj.onclick=function(){
     if(!confirm('「'+r.repo_name+'」をプロジェクト一覧に格上げしますか？'))return;
-    if(D.projects.find(function(p){return p.gh&&p.gh.includes(r.repo_name);})){alert('既にプロジェクト一覧にあります');return;}
-    var p=(r.url||'').replace('https://github.com/','').split('/');
-    D.projects.unshift({id:++D.nextId,name:r.repo_name,gh:p[0]&&p[1]?p[0]+'/'+p[1]:'',
+    if(D.projects.find(function(p){return p.name===r.repo_name;})){alert('既にプロジェクトにあります');return;}
+    var pts=(r.url||'').replace('https://github.com/','').split('/');
+    D.projects.unshift({id:++D.nextId,name:r.repo_name,
+      gh:(pts[0]&&pts[1])?pts[0]+'/'+pts[1]:'',
       user:'self',idea:'self',stock:'github',rev:'free',revAmt:0,
       status:'wip',progress:0,client:'',memo:r.description||''});
-    scheduleSave();
-    closeStockModal();
+    scheduleSave();closeStockModal();
     tab='projects';
     document.querySelectorAll('.nav').forEach(function(n){n.classList.remove('on');});
     document.querySelectorAll('.nav').forEach(function(n){if(n.textContent.includes('プロジェクト'))n.classList.add('on');});
     render();
-  });
-  btnRow.appendChild(pjBtn);
-
-  var delBtn=document.createElement('button');
-  delBtn.className='btn btn-d'; delBtn.textContent='削除';
-  delBtn.addEventListener('click',function(){
+  };br.appendChild(pj);
+  // 削除
+  var dl=document.createElement('button');dl.className='btn btn-d';dl.textContent='削除';
+  dl.onclick=function(){
     if(!confirm('削除しますか？'))return;
     sheetIds.delete(String(r.id));
     sheetRepos=sheetRepos.filter(function(x){return String(x.id)!==String(r.id);});
     if(GAS)gasSmallWrite({action:'delete_repo',id:r.id});
-    closeStockModal(); render();
-  });
-  btnRow.appendChild(delBtn);
+    closeStockModal();render();
+  };br.appendChild(dl);
+  // 閉じる
+  var cl=document.createElement('button');cl.className='btn';cl.textContent='✕ 閉じる';
+  cl.style.marginLeft='auto';cl.onclick=closeStockModal;br.appendChild(cl);
 
-  var closeBtn=document.createElement('button');
-  closeBtn.className='btn'; closeBtn.textContent='✕ 閉じる';
-  closeBtn.style.marginLeft='auto';
-  closeBtn.addEventListener('click',closeStockModal);
-  btnRow.appendChild(closeBtn);
-
-  box.appendChild(btnRow);
-  overlay.appendChild(box);
-  document.body.appendChild(overlay);
+  box.appendChild(br);ov.appendChild(box);document.body.appendChild(ov);
 }
-
-function closeStockModal(){
-  var m=document.getElementById('stock-modal');
-  if(m)m.remove();
-}
+function closeStockModal(){var m=document.getElementById('_sm');if(m)m.remove();}
 
 </script>
 </body>
