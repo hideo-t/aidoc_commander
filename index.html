@@ -820,26 +820,122 @@ ${stockSection}`;
 }
 
 function stockCard(r){
-  const id=r.id,isExp=expR['s_'+id];
+  const id=r.id, isExp=expR['s_'+id];
   const sm={active:'稼働中',wip:'開発中',idea:'アイデア',done:'完了'};
   const sc={active:'tg-act',wip:'tg-wip',idea:'tg-idea',done:'tg-arch'};
   const pc={high:'tg-hi',mid:'tg-mid',low:'tg-lo2'};
+
+  // 1. リンク先: homepage > GitHub Pages推測 > GitHub URL
+  const ghUser = r.url ? r.url.replace('https://github.com/','').split('/')[0] : '';
+  const repoName = r.url ? r.url.replace('https://github.com/','').split('/')[1] : '';
+  const ghPagesUrl = (ghUser && repoName) ? `https://${ghUser}.github.io/${repoName}/` : '';
+  const liveUrl = r.homepage || ghPagesUrl;
+
+  // 変更バッファ（保存ボタン押下まで反映しない）
+  const bufKey = 'buf_'+id;
+  if(!window._scBuf) window._scBuf={};
+  if(!window._scBuf[bufKey]) window._scBuf[bufKey]={group:r.group||'未分類',status:r.status||'idea',priority:r.priority||'mid',memo:r.memo||''};
+  const buf = window._scBuf[bufKey];
+
   return`<div class="rcard${isExp?' exp':''}">
 <div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}'];render()">
-${r.url?`<a href="${r.url}" target="_blank" class="rname" style="text-decoration:none;color:var(--text);cursor:pointer" title="${h(r.url)}" onclick="event.stopPropagation()">${h(r.repo_name||'—')} <span style="font-size:.58rem;color:var(--text3)">↗</span></a>`:`<span class="rname">${h(r.repo_name||'—')}</span>`}
-${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
-<span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status}</span>
-<span class="tag ${pc[r.priority]||'tg-lo2'}">${r.priority==='high'?'高':r.priority==='mid'?'中':'低'}</span>
+  ${liveUrl
+    ?`<a href="${liveUrl}" target="_blank" class="rname" style="text-decoration:none;color:var(--text);cursor:pointer" onclick="event.stopPropagation()" title="${liveUrl}">${h(r.repo_name||'—')} <span style="font-size:.58rem;color:${r.homepage?'#5dcca5':'var(--text3)'}">${r.homepage?'🌐↗':'▶↗'}</span></a>`
+    :`<span class="rname">${h(r.repo_name||'—')}</span>`}
+  ${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
+  <span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status}</span>
+  <span class="tag ${pc[r.priority]||'tg-lo2'}">${r.priority==='high'?'高':r.priority==='mid'?'中':'低'}</span>
 </div>
 ${r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
 <div class="rdetail">
-<div><div class="dlbl">グループ</div><select onclick="event.stopPropagation()" onchange="updSheet('${id}','group',this.value)">${groups.map(g=>`<option value="${g}"${(r.group||'未分類')===g?' selected':''}>${g}</option>`).join('')}</select></div>
-<div><div class="dlbl">ステータス</div><select onclick="event.stopPropagation()" onchange="updSheet('${id}','status',this.value)"><option value="idea"${r.status==='idea'?' selected':''}>アイデア</option><option value="wip"${r.status==='wip'?' selected':''}>開発中</option><option value="active"${r.status==='active'?' selected':''}>稼働中</option><option value="done"${r.status==='done'?' selected':''}>完了</option></select></div>
-<div><div class="dlbl">優先度</div><select onclick="event.stopPropagation()" onchange="updSheet('${id}','priority',this.value)"><option value="high"${r.priority==='high'?' selected':''}>高</option><option value="mid"${r.priority==='mid'?' selected':''}>中</option><option value="low"${r.priority==='low'?' selected':''}>低</option></select></div>
-<div><div class="dlbl">メモ</div><textarea onclick="event.stopPropagation()" onchange="updSheet('${id}','memo',this.value)">${h(r.memo||'')}</textarea></div>
-<div style="grid-column:span 2"><div class="btn-row">${r.url?`<a href="${r.url}" target="_blank" class="btn" onclick="event.stopPropagation()">GitHub →</a>`:''} ${r.homepage?`<a href="${h(r.homepage)}" target="_blank" class="btn" onclick="event.stopPropagation()">公開 →</a>`:''} <button class="btn btn-d" onclick="event.stopPropagation();delSheet('${id}')">削除</button></div></div>
+  <div><div class="dlbl">グループ</div>
+    <select onclick="event.stopPropagation()" onchange="window._scBuf['${bufKey}'].group=this.value">
+      ${groups.map(g=>`<option value="${g}"${buf.group===g?' selected':''}>${g}</option>`).join('')}
+    </select>
+  </div>
+  <div><div class="dlbl">ステータス</div>
+    <select onclick="event.stopPropagation()" onchange="window._scBuf['${bufKey}'].status=this.value">
+      <option value="idea"${buf.status==='idea'?' selected':''}>アイデア</option>
+      <option value="wip"${buf.status==='wip'?' selected':''}>開発中</option>
+      <option value="active"${buf.status==='active'?' selected':''}>稼働中</option>
+      <option value="done"${buf.status==='done'?' selected':''}>完了</option>
+    </select>
+  </div>
+  <div><div class="dlbl">優先度</div>
+    <select onclick="event.stopPropagation()" onchange="window._scBuf['${bufKey}'].priority=this.value">
+      <option value="high"${buf.priority==='high'?' selected':''}>高</option>
+      <option value="mid"${buf.priority==='mid'?' selected':''}>中</option>
+      <option value="low"${buf.priority==='low'?' selected':''}>低</option>
+    </select>
+  </div>
+  <div><div class="dlbl">メモ</div>
+    <textarea onclick="event.stopPropagation()" oninput="window._scBuf['${bufKey}'].memo=this.value">${h(buf.memo)}</textarea>
+  </div>
+  <div style="grid-column:span 2"><div class="btn-row">
+    ${liveUrl?`<a href="${liveUrl}" target="_blank" class="btn btn-g" onclick="event.stopPropagation()">${r.homepage?'🌐 公開ページ →':'▶ GitHub Pages →'}</a>`:''}
+    ${r.url?`<a href="${r.url}" target="_blank" class="btn" onclick="event.stopPropagation()">GitHub →</a>`:''}
+    <button class="btn" style="background:var(--green);color:#fff;border-color:var(--green)"
+      onclick="event.stopPropagation();saveStockCard('${id}')">💾 保存</button>
+    <button class="btn btn-p"
+      onclick="event.stopPropagation();promoteToProject('${id}')" title="プロジェクト一覧に追加">⬆ PJ格上げ</button>
+    <button class="btn btn-d" onclick="event.stopPropagation();delSheet('${id}')">削除</button>
+  </div></div>
 </div></div>`;
 }
+
+// 2. 保存ボタン処理
+async function saveStockCard(id){
+  const bufKey='buf_'+id;
+  const buf=window._scBuf&&window._scBuf[bufKey];
+  if(!buf) return;
+  const i=sheetRepos.findIndex(r=>String(r.id)===String(id));
+  if(i>=0){
+    sheetRepos[i].group    = buf.group;
+    sheetRepos[i].status   = buf.status;
+    sheetRepos[i].priority = buf.priority;
+    sheetRepos[i].memo     = buf.memo;
+  }
+  setDot('busy','保存中...');
+  if(GAS){
+    await gasSmallWrite({action:'update_repo', id,
+      group:buf.group, status:buf.status, priority:buf.priority, memo:buf.memo});
+  }
+  setDot('ok','保存完了');
+  render();
+}
+
+// 3. PJ格上げ（アイデアストック → プロジェクト一覧）
+function promoteToProject(id){
+  const r = sheetRepos.find(x=>String(x.id)===String(id));
+  if(!r) return;
+  if(!confirm(`「${r.repo_name}」をプロジェクト一覧に格上げしますか？`)) return;
+  // 重複チェック
+  if(D.projects.find(p=>p.gh&&p.gh.includes(r.repo_name))){
+    alert('すでにプロジェクト一覧に存在します');return;
+  }
+  D.projects.unshift({
+    id:++D.nextId,
+    name:r.repo_name,
+    gh: r.url ? r.url.replace('https://github.com/','') : '',
+    user:'self', idea:'self', stock:'github',
+    rev:'free', revAmt:0,
+    status: r.status==='active'?'active':'wip',
+    progress:0,
+    client:'',
+    memo: r.description||r.memo||''
+  });
+  // シート側のステータスも更新
+  const i=sheetRepos.findIndex(x=>String(x.id)===String(id));
+  if(i>=0) sheetRepos[i].status='active';
+  if(GAS) gasSmallWrite({action:'update_repo', id, status:'active'});
+  scheduleSave();
+  tab='projects';
+  document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));
+  document.querySelectorAll('.nav').forEach(n=>{ if(n.textContent.includes('プロジェクト')) n.classList.add('on'); });
+  render();
+  alert(`✅ プロジェクト一覧に追加しました！\n「📁 プロジェクト」タブで確認・編集できます`);
+}
+
 
 function rNote(){
   return`<div class="phdr"><div><div class="ptitle">メモ・目標設定</div></div></div>
