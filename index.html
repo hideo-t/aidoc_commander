@@ -296,6 +296,8 @@ let sFilter = 'all'; let sSearch = '';
 let fetched = []; let sheetRepos = []; let sheetIds = new Set();
 let groups = ['未分類','AI・Bot','収益化候補','横展開可能','顧客向け','個人プロジェクト','アーカイブ'];
 let saveTimer = null;
+let execLogs = []; // 実行ログ
+let lastRefresh = null; // 最終更新日時
 
 const DEF = {
   pipeline:[
@@ -405,6 +407,7 @@ async function loadGAS(){
   }
   render();
   loadSheetRepos();
+  loadExecLogs();
 }
 
 async function loadSheetRepos(){
@@ -428,6 +431,45 @@ async function gasSmallWrite(payload){
     const r=await gasPost(payload);
     if(r.status!=='ok')console.warn('GAS write warning:',r);
   }catch(e){console.error('gasSmallWrite error:',e);}
+}
+
+// 実行ログ取得
+async function loadExecLogs(){
+  if(!GAS)return;
+  try{
+    const r=await gasGet({action:'get_log'});
+    if(r.status==='ok'){
+      execLogs=r.logs||[];
+      // 最終refreshAllReposの日時を取得
+      const lastRef=execLogs.find(l=>l.action==='refreshAllRepos'&&(l.status==='success'||l.status==='partial'));
+      if(lastRef)lastRefresh=new Date(lastRef.timestamp);
+    }
+  }catch(e){console.error('loadExecLogs error:',e);}
+}
+
+// 手動でGitHub pushed_atを再取得
+async function triggerRefresh(){
+  if(!GAS){alert('GAS URLを設定してください');return;}
+  if(!confirm('全リポジトリのpushed_atをGitHub APIから再取得します。\n171件の場合、約30秒かかります。\n\n実行しますか？'))return;
+  setDot('busy','GitHub更新中...');
+  try{
+    const r=await gasPost({action:'refresh_repos'});
+    if(r.status==='ok'){
+      setDot('ok','更新開始');
+      alert('更新を開始しました。\n完了まで30秒〜1分お待ちください。\n\n「再読込」ボタンで最新データを確認できます。');
+      // 少し待ってからログを再取得
+      setTimeout(async()=>{
+        await loadExecLogs();
+        await loadSheetRepos();
+        render();
+      },5000);
+    }else{
+      setDot('err',`更新失敗: ${r.message||'不明なエラー'}`);
+    }
+  }catch(e){
+    setDot('err',`通信エラー: ${e.message}`);
+    console.error('triggerRefresh error:',e);
+  }
 }
 
 async function connectGASSide(){
@@ -808,11 +850,11 @@ function rIdeas(){
   const sec=(lbl,list,col)=>list.length===0?'':
     `<div class="stxt" style="color:${col};margin:10px 0 5px">${lbl}（${list.length}）</div>${list.map(idea=>{const gi=dIdeas.indexOf(idea);return`<div class="idearow"><span class="tag${idea.src==='client'?' tg-u':' tg-idea'}">${idea.src==='client'?'顧客発':'自発'}</span><div class="ideatxt"><input value="${h(idea.text)}" oninput="D.ideas[${gi}].text=this.value;scheduleSave()"></div><select onchange="D.ideas[${gi}].priority=this.value;scheduleSave();render()"><option value="high"${idea.priority==='high'?' selected':''}>高</option><option value="mid"${idea.priority==='mid'?' selected':''}>中</option><option value="low"${idea.priority==='low'?' selected':''}>低</option></select><button class="btn" style="padding:2px 6px;font-size:.62rem" onclick="ideaToPJ(${gi})">→PJ化</button><button class="btn btn-d" style="padding:2px 5px" onclick="D.ideas.splice(${gi},1);scheduleSave();render()">✕</button></div>`;}).join('')}`;
 
-  // Sheet repos - 日付で新しいものから（added_at > updated_at > id）
+  // Sheet repos - GitHub更新日（pushed_at）で新しいものから
   let slist=[...allRep];
   slist.sort((a,b)=>{
-    const da=parseJpDate(a.added_at)||parseJpDate(a.updated_at)||new Date(0);
-    const db=parseJpDate(b.added_at)||parseJpDate(b.updated_at)||new Date(0);
+    const da=parseJpDate(a.pushed_at)||parseJpDate(a.updated_at)||parseJpDate(a.added_at)||new Date(0);
+    const db=parseJpDate(b.pushed_at)||parseJpDate(b.updated_at)||parseJpDate(b.added_at)||new Date(0);
     if(da.getTime()!==db.getTime())return db.getTime()-da.getTime();
     return (b.id||0)-(a.id||0);
   });
@@ -821,17 +863,41 @@ function rIdeas(){
   if(sFilter==='active')slist=slist.filter(r=>r.status==='active');
   if(sFilter==='idea')slist=slist.filter(r=>r.status==='idea');
 
+  // 同期ステータス
+  const syncStatus=()=>{
+    const lastLog=execLogs.find(l=>l.action==='refreshAllRepos');
+    const lastTime=lastRefresh?lastRefresh.toLocaleString('ja-JP'):'未取得';
+    const daysSince=lastRefresh?Math.floor((new Date()-lastRefresh)/(1000*60*60*24)):null;
+    const isStale=daysSince!==null&&daysSince>1;
+    const recentLogs=execLogs.slice(0,5);
+    return`<div class="card" style="margin-bottom:1rem;${isStale?'border-color:rgba(186,117,23,.4)':''}">
+<div class="ctitle">🔄 データ同期<span style="font-size:.6rem;color:var(--text3);margin-left:8px">GitHub pushed_at 自動更新</span></div>
+<div style="display:flex;gap:1rem;align-items:center;margin-bottom:8px">
+  <div style="flex:1">
+    <div style="font-size:.72rem;color:var(--text2)">最終更新: <strong style="color:${isStale?'var(--amber)':'var(--green)'}">${lastTime}</strong>${daysSince!==null?` (${daysSince}日前)`:''}</div>
+    ${isStale?'<div style="font-size:.65rem;color:var(--amber);margin-top:2px">⚠ 2日以上更新がありません。手動更新を実行してください。</div>':''}
+  </div>
+  <button class="btn btn-p" onclick="triggerRefresh()" style="white-space:nowrap">🚀 手動更新</button>
+  <button class="btn" onclick="loadExecLogs().then(()=>render())" style="white-space:nowrap">📋 ログ更新</button>
+</div>
+${recentLogs.length?`<div style="font-size:.62rem;color:var(--text3);border-top:1px solid var(--border);padding-top:6px;margin-top:4px">
+<div style="margin-bottom:4px">実行ログ（最新5件）:</div>
+${recentLogs.map(l=>`<div style="display:flex;gap:6px;padding:2px 0"><span style="color:var(--text3)">${new Date(l.timestamp).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span><span class="tag ${l.status==='success'?'tg-act':l.status==='error'?'tg-hi':'tg-wip'}" style="font-size:.55rem">${l.status}</span><span style="color:var(--text2)">${h(l.action)}</span><span style="color:var(--text3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(l.message||'')}</span></div>`).join('')}
+</div>`:''}</div>`;
+  };
+
   return`<div class="phdr"><div><div class="ptitle">アイデアストック</div><div class="psub">手動アイデア + GitHub発掘リポジトリ</div></div><div class="btn-row"><button class="btn btn-p" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'self',priority:'high'});render()">+ 自発</button><button class="btn" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'client',priority:'high'});render()">+ 顧客発</button></div></div>
+${syncStatus()}
 ${sec('🔴 優先度高',hi,'var(--red)')}${sec('🟡 優先度中',mi,'var(--amber)')}${sec('⬜ 優先度低',lo,'var(--text3)')}
 ${allRep.length>0?`<div style="margin:1.25rem 0 .75rem;border-top:1px solid var(--border);padding-top:1rem">
-<div class="ctitle" style="margin-bottom:.75rem">📊 GitHubストック<span style="font-size:.6rem;color:var(--text3);margin-left:6px">${slist.length}/${allRep.length}件（登録順）</span></div>
+<div class="ctitle" style="margin-bottom:.75rem">📊 GitHubストック<span style="font-size:.6rem;color:var(--text3);margin-left:6px">${slist.length}/${allRep.length}件（更新日順）</span></div>
 <div class="fbar">
 <input type="text" placeholder="🔍 検索..." value="${h(sSearch)}" oninput="sSearch=this.value;render()">
 <button class="chip${sFilter==='all'?' on':''}" onclick="sFilter='all';render()">すべて</button>
 <button class="chip${sFilter==='high'?' on':''}" onclick="sFilter='high';render()">優先度高</button>
 <button class="chip${sFilter==='active'?' on':''}" onclick="sFilter='active';render()">稼働中</button>
 <button class="chip${sFilter==='idea'?' on':''}" onclick="sFilter='idea';render()">アイデア</button>
-<button class="btn" style="margin-left:auto;font-size:.62rem" onclick="loadSheetRepos().then(()=>render())">🔄 再読込</button>
+<button class="btn" style="margin-left:auto;font-size:.62rem" onclick="loadSheetRepos().then(()=>{loadExecLogs();render()})">🔄 再読込</button>
 </div>
 <div class="rlist">${slist.map(r=>stockCard(r)).join('')}</div>
 </div>`:'<div style="margin-top:1rem;padding:1rem;text-align:center;font-size:.72rem;color:var(--text3)">GitHubタブで発掘してシートに追加するとここに表示されます</div>'}`;
@@ -857,16 +923,19 @@ function stockCard(r){
   const sm={active:'稼働中',wip:'開発中',idea:'アイデア',done:'完了'};
   const sc={active:'tg-act',wip:'tg-wip',idea:'tg-idea',done:'tg-arch'};
   const pc={high:'tg-hi',mid:'tg-mid',low:'tg-lo2'};
-  // 日付パース（added_at優先）
-  const addedDate=parseJpDate(r.added_at)||parseJpDate(r.created_at)||parseJpDate(r.updated_at);
-  const dateStr=addedDate?addedDate.toLocaleDateString('ja-JP'):'';
+  // 日付パース（pushed_at優先でGitHub更新日を表示）
+  const pushedDate=parseJpDate(r.pushed_at)||parseJpDate(r.updated_at);
+  const addedDate=parseJpDate(r.added_at);
+  // days_since_pushはGASが動的計算するか、フロントで計算
+  const daysSince=r.days_since_push||(pushedDate?Math.floor((new Date()-pushedDate)/(1000*60*60*24)):null);
+  const dateStr=pushedDate?pushedDate.toLocaleDateString('ja-JP'):(addedDate?addedDate.toLocaleDateString('ja-JP'):'');
   return`<div class="rcard${isExp?' exp':''}">
 <div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}];render()">
 <span class="rname">${h(r.repo_name||r.name||'—')}</span>
 ${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
 <span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status||'アイデア'}</span>
 <span class="tag ${pc[r.priority]||'tg-lo2'}">${r.priority==='high'?'高':r.priority==='mid'?'中':'低'}</span>
-${dateStr?`<span class="rmeta">${dateStr}</span>`:''}
+${daysSince!==null?`<span class="rmeta" title="GitHub最終push: ${dateStr}">${tago(daysSince)}</span>`:(dateStr?`<span class="rmeta">${dateStr}</span>`:'')}
 </div>
 ${r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
 <div class="rdetail">
