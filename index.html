@@ -285,12 +285,12 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 const LS  = 'hideo_os_v4';
 const GK  = 'hideo_gas_url';
 const DK  = 'hideo_os_main';
-const DEFAULT_GAS = 'https://script.google.com/macros/s/AKfycbzGnzx0d3go0fa6K6RQqFDAWaG_BVKAIQyvPJn_31QgQGP-n2_DhswOoIZiu6kXZksCnQ/exec';
+const DEFAULT_GAS = 'https://script.google.com/macros/s/AKfycbxbHSX_x2C53BH8PYhX6L9tYN5fEWeun4qKMKCBOhPSddqNkBP8ZROc_VQIq_lNbGVsIw/exec';
 
 // Check if stored URL is valid, otherwise use default
 let storedGAS = localStorage.getItem(GK) || '';
 // Fix: If the stored URL is an old deployment, clear it and use new one
-if(storedGAS && !storedGAS.includes('AKfycbzGnzx0d3go0fa6K6RQqFDAWaG_BVKAIQyvPJn_31QgQGP-n2_DhswOoIZiu6kXZksCnQ')){
+if(storedGAS && !storedGAS.includes('AKfycbxbHSX_x2C53BH8PYhX6L9tYN5fEWeun4qKMKCBOhPSddqNkBP8ZROc_VQIq_lNbGVsIw')){
   storedGAS = '';
   localStorage.removeItem(GK);
 }
