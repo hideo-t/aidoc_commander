@@ -664,58 +664,6 @@ async function loadExecLogs(){
   }catch(e){console.error('loadExecLogs error:',e);}
 }
 
-// トリガー状態変数
-let triggerExists = null;
-
-// トリガー状態チェック
-async function checkTriggerStatus(){
-  if(!GAS)return;
-  try{
-    const r=await gasPost({action:'check_trigger'});
-    if(r.status==='ok'){
-      triggerExists=r.exists===true;
-    }
-  }catch(e){console.error('checkTriggerStatus error:',e);triggerExists=false;}
-}
-
-// 日次トリガー設定
-async function setupDailyTrigger(){
-  if(!GAS){alert('GAS URLが未設定です');return;}
-  if(!confirm('日次トリガー（毎日3:00AM）を設定しますか？'))return;
-  try{
-    setDot('busy','トリガー設定中...');
-    const r=await gasPost({action:'setup_trigger'});
-    if(r.status==='ok'){
-      triggerExists=true;
-      setDot('ok','トリガー設定完了');
-      render();
-    }else{
-      setDot('err',r.message||'設定失敗');
-    }
-  }catch(e){setDot('err','通信エラー');}
-}
-
-// 手動更新実行
-async function triggerRefresh(){
-  if(!GAS){alert('GAS URLが未設定です');return;}
-  if(!confirm('GitHub全リポジトリを手動更新しますか？'))return;
-  try{
-    setDot('busy','更新実行中...');
-    const r=await gasPost({action:'refresh_repos'});
-    if(r.status==='ok'){
-      setDot('ok','更新開始');
-      // 少し待ってログを再読み込み
-      setTimeout(async()=>{
-        await loadExecLogs();
-        await loadSheetRepos();
-        render();
-      },3000);
-    }else{
-      setDot('err',r.message||'更新失敗');
-    }
-  }catch(e){setDot('err','通信エラー');}
-}
-
 // ═══════════════════════════════════════════════════════════
 // 統合パイプラインAPI
 // ═══════════════════════════════════════════════════════════
