@@ -808,9 +808,14 @@ function rIdeas(){
   const sec=(lbl,list,col)=>list.length===0?'':
     `<div class="stxt" style="color:${col};margin:10px 0 5px">${lbl}（${list.length}）</div>${list.map(idea=>{const gi=dIdeas.indexOf(idea);return`<div class="idearow"><span class="tag${idea.src==='client'?' tg-u':' tg-idea'}">${idea.src==='client'?'顧客発':'自発'}</span><div class="ideatxt"><input value="${h(idea.text)}" oninput="D.ideas[${gi}].text=this.value;scheduleSave()"></div><select onchange="D.ideas[${gi}].priority=this.value;scheduleSave();render()"><option value="high"${idea.priority==='high'?' selected':''}>高</option><option value="mid"${idea.priority==='mid'?' selected':''}>中</option><option value="low"${idea.priority==='low'?' selected':''}>低</option></select><button class="btn" style="padding:2px 6px;font-size:.62rem" onclick="ideaToPJ(${gi})">→PJ化</button><button class="btn btn-d" style="padding:2px 5px" onclick="D.ideas.splice(${gi},1);scheduleSave();render()">✕</button></div>`;}).join('')}`;
 
-  // Sheet repos - 登録順（新しいものから）- IDが大きいほど新しい
+  // Sheet repos - 日付で新しいものから（added_at > updated_at > id）
   let slist=[...allRep];
-  slist.sort((a,b)=>(b.id||0)-(a.id||0));
+  slist.sort((a,b)=>{
+    const da=parseJpDate(a.added_at)||parseJpDate(a.updated_at)||new Date(0);
+    const db=parseJpDate(b.added_at)||parseJpDate(b.updated_at)||new Date(0);
+    if(da.getTime()!==db.getTime())return db.getTime()-da.getTime();
+    return (b.id||0)-(a.id||0);
+  });
   if(sSearch){const q=sSearch.toLowerCase();slist=slist.filter(r=>(r.repo_name||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q)||(r.memo||'').toLowerCase().includes(q));}
   if(sFilter==='high')slist=slist.filter(r=>r.priority==='high');
   if(sFilter==='active')slist=slist.filter(r=>r.status==='active');
@@ -832,14 +837,29 @@ ${allRep.length>0?`<div style="margin:1.25rem 0 .75rem;border-top:1px solid var(
 </div>`:'<div style="margin-top:1rem;padding:1rem;text-align:center;font-size:.72rem;color:var(--text3)">GitHubタブで発掘してシートに追加するとここに表示されます</div>'}`;
 }
 
+// 日付パースヘルパー（各種形式対応）
+function parseJpDate(str){
+  if(!str)return null;
+  // 既にDateオブジェクトの場合
+  if(str instanceof Date)return str;
+  // 文字列の場合
+  const s=String(str).trim();
+  // "2026/3/18 5:58:51" 形式
+  const m1=s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  if(m1)return new Date(parseInt(m1[1]),parseInt(m1[2])-1,parseInt(m1[3]));
+  // ISO形式やその他
+  const d=new Date(s);
+  return isNaN(d.getTime())?null:d;
+}
+
 function stockCard(r){
   const id=r.id,isExp=expR['s_'+id];
   const sm={active:'稼働中',wip:'開発中',idea:'アイデア',done:'完了'};
   const sc={active:'tg-act',wip:'tg-wip',idea:'tg-idea',done:'tg-arch'};
   const pc={high:'tg-hi',mid:'tg-mid',low:'tg-lo2'};
-  // added_atがあれば使う、なけれ���表示しない
-  const addedDate=r.added_at||r.created_at;
-  const dateStr=addedDate?new Date(addedDate).toLocaleDateString('ja-JP'):'';
+  // 日付パース（added_at優先）
+  const addedDate=parseJpDate(r.added_at)||parseJpDate(r.created_at)||parseJpDate(r.updated_at);
+  const dateStr=addedDate?addedDate.toLocaleDateString('ja-JP'):'';
   return`<div class="rcard${isExp?' exp':''}">
 <div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}];render()">
 <span class="rname">${h(r.repo_name||r.name||'—')}</span>
