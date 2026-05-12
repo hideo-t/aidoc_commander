@@ -859,7 +859,7 @@ function rIdeas(){
     if(da.getTime()!==db.getTime())return db.getTime()-da.getTime();
     return (b.id||0)-(a.id||0);
   });
-  if(sSearch){const q=sSearch.toLowerCase();slist=slist.filter(r=>(r.repo_name||r.name||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q)||(r.memo||'').toLowerCase().includes(q)||(r.language||'').toLowerCase().includes(q)||(r.group||'').toLowerCase().includes(q)||(r.url||'').toLowerCase().includes(q));}
+  if(sSearch){const q=sSearch.toLowerCase();slist=slist.filter(r=>String(r.repo_name||r.name||'').toLowerCase().includes(q)||String(r.description||'').toLowerCase().includes(q)||String(r.memo||'').toLowerCase().includes(q)||String(r.language||'').toLowerCase().includes(q)||String(r.group||'').toLowerCase().includes(q)||String(r.url||'').toLowerCase().includes(q));}
   if(sFilter==='high')slist=slist.filter(r=>r.priority==='high');
   if(sFilter==='active')slist=slist.filter(r=>r.status==='active');
   if(sFilter==='idea')slist=slist.filter(r=>r.status==='idea');
