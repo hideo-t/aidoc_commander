@@ -15,10 +15,26 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 設定
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const SHEET_NAME_REPOS = 'repo_ideas';  // 実際のシート名
+const SHEET_NAME_REPOS = 'repo_ideas';  // 旧シート（互換用）
+const SHEET_NAME_CASES = 'cases';       // 新統合シート
+const SHEET_NAME_CLIENTS = 'clients';   // クライアントマスタ
 const SHEET_NAME_DATA = 'Data';
 const SHEET_NAME_LOG = 'ExecutionLog';
 const GITHUB_TOKEN = ''; // 任意: ghp_xxxx 形式のトークン（プライベートリポジトリ用）
+
+// cases シートのヘッダー定義
+const CASES_HEADERS = [
+  'id', 'stage', 'source', 'repo_url', 'name', 'description', 'language', 'stars',
+  'github_pushed_at', 'client_id', 'contract_type', 'monthly_amount', 'contract_start',
+  'contract_end', 'auto_renew', 'contract_url', 'billing_status', 'invoice_number',
+  'invoice_date', 'paid_date', 'memo', 'created_at', 'updated_at'
+];
+
+// clients シートのヘッダー定義
+const CLIENTS_HEADERS = [
+  'client_id', 'name', 'address', 'contact_name', 'contact_email',
+  'billing_address', 'billing_method', 'notes', 'created_at', 'updated_at'
+];
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Web App エントリーポイント
@@ -51,12 +67,34 @@ function doGet(e) {
     return getExecutionLog();
   }
 
+  // === 新統合API ===
+  if (action === 'get_cases') {
+    return getCases(params.stage);
+  }
+
+  if (action === 'get_clients') {
+    return getClients();
+  }
+
   // キーバリューストレージ
   if (params.key) {
     return getValue(params.key);
   }
 
   return jsonResponse({ status: 'error', message: 'Unknown action' });
+}
+
+/**
+ * POST リクエストハンドラ
+ * Content-Type: text/plain でCORSプリフライト回避
+ */
+function doPost(e) {
+  try {
+    const body = JSON.parse(e.postData.contents);
+    return handleRequest(body);
+  } catch (err) {
+    return jsonResponse({ status: 'error', message: 'doPost error: ' + err.message });
+  }
 }
 
 function handleRequest(body) {
@@ -85,6 +123,43 @@ function handleRequest(body) {
 
   if (action === 'sync_repos') {
     return syncAllReposManual();
+  }
+
+  // === 新統合API ===
+  if (action === 'create_case') {
+    return createCase(body);
+  }
+
+  if (action === 'update_case') {
+    return updateCase(body);
+  }
+
+  if (action === 'promote_case') {
+    return promoteCase(body.id, body.data || {});
+  }
+
+  if (action === 'create_client') {
+    return createClient(body);
+  }
+
+  if (action === 'update_client') {
+    return updateClient(body);
+  }
+
+  if (action === 'import_repos_to_cases') {
+    return importReposToCases();
+  }
+
+  // === トリガー管理 ===
+  if (action === 'setup_trigger') {
+    setupDailyTrigger();
+    return jsonResponse({ status: 'ok', message: 'Daily trigger set for 3:00 AM' });
+  }
+
+  if (action === 'check_trigger') {
+    const triggers = ScriptApp.getProjectTriggers()
+      .filter(t => t.getHandlerFunction() === 'refreshAllRepos');
+    return jsonResponse({ status: 'ok', exists: triggers.length > 0, count: triggers.length });
   }
 
   return jsonResponse({ status: 'error', message: 'Unknown action: ' + action });
@@ -118,8 +193,9 @@ function getRepos() {
         repo[headers[j]] = row[j];
       }
 
-      // days_since_push を動的に計算（updated_atから）
+      // updated_at は GitHub の pushed_at の意味なので、両方の名前で返す
       if (repo.updated_at) {
+        repo.pushed_at = repo.updated_at;  // エイリアス追加
         const updatedDate = new Date(repo.updated_at);
         repo.days_since_push = Math.floor((now - updatedDate) / (1000 * 60 * 60 * 24));
       }
@@ -374,6 +450,45 @@ function refreshAllRepos() {
           // size も更新
           if (sizeCol >= 0 && repoData.size !== undefined) {
             sheet.getRange(rowNum, sizeCol + 1).setValue(repoData.size);
+          }
+
+          // score を再計算（日数経過で「埋もれ判定」が変わるため）
+          const scoreCol = headers.indexOf('score');
+          const gemReasonCol = headers.indexOf('gem_reason');
+          if (scoreCol >= 0) {
+            let sc = 0;
+            let isGem = false;
+            let reason = '';
+            if (repoData.stargazers_count > 0) sc += repoData.stargazers_count * 5;
+            if (repoData.forks_count > 0) sc += repoData.forks_count * 3;
+            if (daysSince > 30 && daysSince < 365) sc += 20;
+            if (daysSince < 30) sc += 10;
+            if (repoData.description) sc += 15;
+            if (repoData.homepage) sc += 20;
+            if (repoData.size > 100) sc += 10;
+            if (repoData.size > 1000) sc += 15;
+            // 埋もれ宝判定: 実装済み（size>50）かつ半年〜2年放置
+            if (!repoData.fork && daysSince > 180 && daysSince < 730 && repoData.size > 50) {
+              isGem = true;
+              reason = '実装済み長期放置';
+            }
+            // 収益化シグナル
+            const name = (repoData.name + ' ' + (repoData.description || '')).toLowerCase();
+            if (['stripe', 'payment', 'subscription', 'saas'].some(k => name.includes(k))) {
+              sc += 30;
+              isGem = true;
+              reason = reason || '収益化シグナル';
+            }
+            // 横展開可能
+            if (['template', 'boilerplate', 'starter', 'generator'].some(k => name.includes(k))) {
+              sc += 25;
+              isGem = true;
+              reason = reason || '横展開可能';
+            }
+            sheet.getRange(rowNum, scoreCol + 1).setValue(Math.max(0, sc));
+            if (gemReasonCol >= 0 && reason) {
+              sheet.getRange(rowNum, gemReasonCol + 1).setValue(reason);
+            }
           }
 
           success++;
@@ -682,6 +797,444 @@ function getExecutionLog() {
 
     return jsonResponse({ status: 'ok', logs: logs });
   } catch (err) {
+    return jsonResponse({ status: 'error', message: err.message });
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 統合パイプライン: Cases CRUD
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/**
+ * cases シートを初期化
+ */
+function initCasesSheet() {
+  const sheet = getOrCreateSheet(SHEET_NAME_CASES);
+  const data = sheet.getDataRange().getValues();
+  if (data.length === 0 || data[0][0] !== 'id') {
+    sheet.getRange(1, 1, 1, CASES_HEADERS.length).setValues([CASES_HEADERS]);
+  }
+  return sheet;
+}
+
+/**
+ * 全cases取得（stageでフィルタ可能）
+ */
+function getCases(stage) {
+  try {
+    const sheet = initCasesSheet();
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return jsonResponse({ status: 'ok', cases: [] });
+    }
+
+    const headers = data[0];
+    const cases = [];
+    const now = new Date();
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const item = {};
+      for (let j = 0; j < headers.length; j++) {
+        item[headers[j]] = row[j];
+      }
+
+      // stageフィルタ
+      if (stage && item.stage !== stage) continue;
+
+      // days_since_push を動的に計算
+      if (item.github_pushed_at) {
+        const pushedDate = new Date(item.github_pushed_at);
+        item.days_since_push = Math.floor((now - pushedDate) / (1000 * 60 * 60 * 24));
+      }
+
+      cases.push(item);
+    }
+
+    return jsonResponse({ status: 'ok', cases: cases });
+  } catch (err) {
+    logExecution('getCases', 'error', err.message);
+    return jsonResponse({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * case作成
+ */
+function createCase(params) {
+  try {
+    const sheet = initCasesSheet();
+    const now = new Date();
+
+    // 新規ID生成
+    const data = sheet.getDataRange().getValues();
+    let maxId = 0;
+    if (data.length > 1) {
+      const idCol = data[0].indexOf('id');
+      for (let i = 1; i < data.length; i++) {
+        const id = parseInt(data[i][idCol]) || 0;
+        if (id > maxId) maxId = id;
+      }
+    }
+    const newId = maxId + 1;
+
+    const row = CASES_HEADERS.map(h => {
+      if (h === 'id') return newId;
+      if (h === 'stage') return params.stage || 'idea';
+      if (h === 'source') return params.source || 'manual';
+      if (h === 'created_at') return now;
+      if (h === 'updated_at') return now;
+      return params[h] !== undefined ? params[h] : '';
+    });
+
+    sheet.appendRow(row);
+    logExecution('createCase', 'success', 'Created case #' + newId);
+    return jsonResponse({ status: 'ok', id: newId });
+  } catch (err) {
+    logExecution('createCase', 'error', err.message);
+    return jsonResponse({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * case更新
+ */
+function updateCase(params) {
+  const id = params.id;
+  if (!id) return jsonResponse({ status: 'error', message: 'No id provided' });
+
+  try {
+    const sheet = initCasesSheet();
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return jsonResponse({ status: 'error', message: 'Case not found' });
+    }
+
+    const headers = data[0];
+    const idCol = headers.indexOf('id');
+    const updatedAtCol = headers.indexOf('updated_at');
+
+    // 対象行を検索
+    let targetRow = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][idCol]) === String(id)) {
+        targetRow = i + 1;
+        break;
+      }
+    }
+
+    if (targetRow < 0) {
+      return jsonResponse({ status: 'error', message: 'Case not found' });
+    }
+
+    // 更新
+    for (const [key, value] of Object.entries(params)) {
+      if (key === 'id' || key === 'action') continue;
+      const col = headers.indexOf(key);
+      if (col >= 0) {
+        sheet.getRange(targetRow, col + 1).setValue(value);
+      }
+    }
+
+    // updated_at を更新
+    if (updatedAtCol >= 0) {
+      sheet.getRange(targetRow, updatedAtCol + 1).setValue(new Date());
+    }
+
+    return jsonResponse({ status: 'ok' });
+  } catch (err) {
+    logExecution('updateCase', 'error', err.message);
+    return jsonResponse({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * stage昇格
+ * idea → project → contract → invoice
+ */
+function promoteCase(id, data) {
+  if (!id) return jsonResponse({ status: 'error', message: 'No id provided' });
+
+  try {
+    const sheet = initCasesSheet();
+    const sheetData = sheet.getDataRange().getValues();
+    if (sheetData.length <= 1) {
+      return jsonResponse({ status: 'error', message: 'Case not found' });
+    }
+
+    const headers = sheetData[0];
+    const idCol = headers.indexOf('id');
+    const stageCol = headers.indexOf('stage');
+    const updatedAtCol = headers.indexOf('updated_at');
+
+    // 対象行を検索
+    let targetRow = -1;
+    let currentStage = '';
+    for (let i = 1; i < sheetData.length; i++) {
+      if (String(sheetData[i][idCol]) === String(id)) {
+        targetRow = i + 1;
+        currentStage = sheetData[i][stageCol];
+        break;
+      }
+    }
+
+    if (targetRow < 0) {
+      return jsonResponse({ status: 'error', message: 'Case not found' });
+    }
+
+    // 次のstageを決定
+    const stageOrder = ['idea', 'project', 'contract', 'invoice'];
+    const currentIdx = stageOrder.indexOf(currentStage);
+    if (currentIdx < 0 || currentIdx >= stageOrder.length - 1) {
+      return jsonResponse({ status: 'error', message: 'Cannot promote from ' + currentStage });
+    }
+    const nextStage = stageOrder[currentIdx + 1];
+
+    // contract昇格時はclient_id必須
+    if (nextStage === 'contract' && !data.client_id) {
+      return jsonResponse({ status: 'error', message: 'client_id is required for contract' });
+    }
+
+    // invoice昇格時は請求番号を自動採番
+    if (nextStage === 'invoice') {
+      const now = new Date();
+      const ym = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyyMM');
+      // 同月の請求件数を取得
+      const invoiceNumCol = headers.indexOf('invoice_number');
+      let seqNum = 1;
+      for (let i = 1; i < sheetData.length; i++) {
+        const inv = sheetData[i][invoiceNumCol];
+        if (inv && String(inv).startsWith(ym)) {
+          const num = parseInt(String(inv).split('-')[1]) || 0;
+          if (num >= seqNum) seqNum = num + 1;
+        }
+      }
+      data.invoice_number = ym + '-' + String(seqNum).padStart(3, '0');
+      data.invoice_date = now;
+      data.billing_status = 'unbilled';
+    }
+
+    // contract昇格時のデフォルト値
+    if (nextStage === 'contract') {
+      if (!data.contract_start) data.contract_start = new Date();
+      if (data.auto_renew === undefined) data.auto_renew = false;
+    }
+
+    // stage更新
+    sheet.getRange(targetRow, stageCol + 1).setValue(nextStage);
+
+    // 追加データを更新
+    for (const [key, value] of Object.entries(data)) {
+      const col = headers.indexOf(key);
+      if (col >= 0) {
+        sheet.getRange(targetRow, col + 1).setValue(value);
+      }
+    }
+
+    // updated_at
+    if (updatedAtCol >= 0) {
+      sheet.getRange(targetRow, updatedAtCol + 1).setValue(new Date());
+    }
+
+    logExecution('promoteCase', 'success', 'Promoted #' + id + ' to ' + nextStage);
+    return jsonResponse({ status: 'ok', newStage: nextStage });
+  } catch (err) {
+    logExecution('promoteCase', 'error', err.message);
+    return jsonResponse({ status: 'error', message: err.message });
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// クライアントマスタ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/**
+ * clients シートを初期化
+ */
+function initClientsSheet() {
+  const sheet = getOrCreateSheet(SHEET_NAME_CLIENTS);
+  const data = sheet.getDataRange().getValues();
+  if (data.length === 0 || data[0][0] !== 'client_id') {
+    sheet.getRange(1, 1, 1, CLIENTS_HEADERS.length).setValues([CLIENTS_HEADERS]);
+  }
+  return sheet;
+}
+
+/**
+ * 全クライアント取得
+ */
+function getClients() {
+  try {
+    const sheet = initClientsSheet();
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return jsonResponse({ status: 'ok', clients: [] });
+    }
+
+    const headers = data[0];
+    const clients = [];
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const client = {};
+      for (let j = 0; j < headers.length; j++) {
+        client[headers[j]] = row[j];
+      }
+      clients.push(client);
+    }
+
+    return jsonResponse({ status: 'ok', clients: clients });
+  } catch (err) {
+    return jsonResponse({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * クライアント作成
+ */
+function createClient(params) {
+  try {
+    const sheet = initClientsSheet();
+    const now = new Date();
+
+    // 新規ID生成
+    const data = sheet.getDataRange().getValues();
+    let maxId = 0;
+    if (data.length > 1) {
+      for (let i = 1; i < data.length; i++) {
+        const id = parseInt(data[i][0]) || 0;
+        if (id > maxId) maxId = id;
+      }
+    }
+    const newId = maxId + 1;
+
+    const row = CLIENTS_HEADERS.map(h => {
+      if (h === 'client_id') return newId;
+      if (h === 'created_at') return now;
+      if (h === 'updated_at') return now;
+      return params[h] !== undefined ? params[h] : '';
+    });
+
+    sheet.appendRow(row);
+    logExecution('createClient', 'success', 'Created client #' + newId + ': ' + (params.name || ''));
+    return jsonResponse({ status: 'ok', client_id: newId });
+  } catch (err) {
+    logExecution('createClient', 'error', err.message);
+    return jsonResponse({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * クライアント更新
+ */
+function updateClient(params) {
+  const id = params.client_id;
+  if (!id) return jsonResponse({ status: 'error', message: 'No client_id provided' });
+
+  try {
+    const sheet = initClientsSheet();
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return jsonResponse({ status: 'error', message: 'Client not found' });
+    }
+
+    const headers = data[0];
+
+    // 対象行を検索
+    let targetRow = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]) === String(id)) {
+        targetRow = i + 1;
+        break;
+      }
+    }
+
+    if (targetRow < 0) {
+      return jsonResponse({ status: 'error', message: 'Client not found' });
+    }
+
+    // 更新
+    for (const [key, value] of Object.entries(params)) {
+      if (key === 'client_id' || key === 'action') continue;
+      const col = headers.indexOf(key);
+      if (col >= 0) {
+        sheet.getRange(targetRow, col + 1).setValue(value);
+      }
+    }
+
+    // updated_at
+    const updatedAtCol = headers.indexOf('updated_at');
+    if (updatedAtCol >= 0) {
+      sheet.getRange(targetRow, updatedAtCol + 1).setValue(new Date());
+    }
+
+    return jsonResponse({ status: 'ok' });
+  } catch (err) {
+    return jsonResponse({ status: 'error', message: err.message });
+  }
+}
+
+/**
+ * 既存のrepo_ideasシートからcasesシートにインポート
+ */
+function importReposToCases() {
+  try {
+    const repoSheet = getOrCreateSheet(SHEET_NAME_REPOS);
+    const caseSheet = initCasesSheet();
+    const now = new Date();
+
+    const repoData = repoSheet.getDataRange().getValues();
+    if (repoData.length <= 1) {
+      return jsonResponse({ status: 'ok', imported: 0, message: 'No repos to import' });
+    }
+
+    const repoHeaders = repoData[0];
+    const caseData = caseSheet.getDataRange().getValues();
+
+    // 既存のcases IDを取得
+    const existingRepoUrls = new Set();
+    if (caseData.length > 1) {
+      const urlCol = caseData[0].indexOf('repo_url');
+      for (let i = 1; i < caseData.length; i++) {
+        if (caseData[i][urlCol]) existingRepoUrls.add(caseData[i][urlCol]);
+      }
+    }
+
+    let imported = 0;
+    for (let i = 1; i < repoData.length; i++) {
+      const repo = {};
+      for (let j = 0; j < repoHeaders.length; j++) {
+        repo[repoHeaders[j]] = repoData[i][j];
+      }
+
+      // 既にインポート済みならスキップ
+      if (existingRepoUrls.has(repo.url)) continue;
+
+      // casesシートに追加
+      const row = CASES_HEADERS.map(h => {
+        if (h === 'id') return repo.id;
+        if (h === 'stage') return 'idea';
+        if (h === 'source') return 'github';
+        if (h === 'repo_url') return repo.url || '';
+        if (h === 'name') return repo.repo_name || '';
+        if (h === 'description') return repo.description || '';
+        if (h === 'language') return repo.language || '';
+        if (h === 'stars') return repo.stars || 0;
+        if (h === 'github_pushed_at') return repo.updated_at || '';
+        if (h === 'memo') return repo.memo || '';
+        if (h === 'created_at') return repo.added_at || now;
+        if (h === 'updated_at') return repo.updated_at || now;
+        return '';
+      });
+
+      caseSheet.appendRow(row);
+      imported++;
+    }
+
+    logExecution('importReposToCases', 'success', 'Imported ' + imported + ' repos');
+    return jsonResponse({ status: 'ok', imported: imported });
+  } catch (err) {
+    logExecution('importReposToCases', 'error', err.message);
     return jsonResponse({ status: 'error', message: err.message });
   }
 }

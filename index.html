@@ -247,8 +247,9 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
     <div class="logo">AIの町医者<small>司令塔 v3.0</small></div>
     <div class="navsec">OVERVIEW</div>
     <button class="nav on" onclick="go('overview',this)">⚡ ダッシュボード</button>
+    <button class="nav" onclick="go('cases',this)" style="color:var(--green)">🔗 統合パイプライン</button>
+    <div class="navsec">LEGACY（旧画面）</div>
     <button class="nav" onclick="go('pipeline',this)">🎯 商談パイプライン</button>
-    <div class="navsec">PROJECTS</div>
     <button class="nav" onclick="go('projects',this)">📁 プロジェクト</button>
     <button class="nav" onclick="go('contracts',this)">📄 契約管理</button>
     <button class="nav" onclick="go('revenue',this)">💰 収益管理</button>
@@ -263,7 +264,11 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
       <div style="padding:0 .4rem .4rem">
         <div style="font-size:.58rem;color:var(--text3);margin-bottom:3px;font-family:var(--mono)">GAS URL</div>
         <input type="text" id="gas-url-input" placeholder="https://script.google.com/..." style="width:100%;font-size:.62rem;padding:4px 6px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg3);color:var(--text);outline:none;margin-bottom:4px">
-        <button onclick="connectGASSide()" style="width:100%;font-size:.65rem;padding:4px;border-radius:var(--r);border:1px solid var(--green);background:transparent;color:var(--green);cursor:pointer;margin-bottom:3px">接続する</button>
+        <div style="display:flex;gap:3px;margin-bottom:3px">
+          <button onclick="connectGASSide()" style="flex:1;font-size:.65rem;padding:4px;border-radius:var(--r);border:1px solid var(--green);background:transparent;color:var(--green);cursor:pointer">接続</button>
+          <button onclick="resetGASUrl()" style="flex:1;font-size:.65rem;padding:4px;border-radius:var(--r);border:1px solid var(--amber);background:transparent;color:var(--amber);cursor:pointer">リセット</button>
+        </div>
+        <button onclick="runConnectionTest()" style="width:100%;font-size:.65rem;padding:4px;border-radius:var(--r);border:1px solid var(--blue);background:transparent;color:var(--blue);cursor:pointer;margin-bottom:3px">🔍 接続テスト</button>
       </div>
       <button class="nav" onclick="manualSave()" style="color:var(--green)">💾 今すぐ保存</button>
     </div>
@@ -280,8 +285,20 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 const LS  = 'hideo_os_v4';
 const GK  = 'hideo_gas_url';
 const DK  = 'hideo_os_main';
+const DEFAULT_GAS = 'https://script.google.com/macros/s/AKfycbzGnzx0d3go0fa6K6RQqFDAWaG_BVKAIQyvPJn_31QgQGP-n2_DhswOoIZiu6kXZksCnQ/exec';
 
-let GAS   = localStorage.getItem(GK) || '';
+// Check if stored URL is valid, otherwise use default
+let storedGAS = localStorage.getItem(GK) || '';
+// Fix: If the stored URL is an old deployment, clear it and use new one
+if(storedGAS && !storedGAS.includes('AKfycbzGnzx0d3go0fa6K6RQqFDAWaG_BVKAIQyvPJn_31QgQGP-n2_DhswOoIZiu6kXZksCnQ')){
+  storedGAS = '';
+  localStorage.removeItem(GK);
+}
+let GAS = storedGAS || DEFAULT_GAS;
+// Save default if nothing was stored
+if(!storedGAS && DEFAULT_GAS){
+  localStorage.setItem(GK, DEFAULT_GAS);
+}
 let tab   = 'overview';
 let expP  = {}; // project expand
 let expR  = {}; // repo expand
@@ -299,6 +316,15 @@ let groups = ['未分類','AI・Bot','収益化候補','横展開可能','顧客
 let saveTimer = null;
 let execLogs = []; // 実行ログ
 let lastRefresh = null; // 最終更新日時
+
+// 統合パイプライン用state
+let cases = [];       // 全cases
+let clients = [];     // クライアントマスタ
+let caseFilter = 'all';  // all / idea / project / contract / invoice
+let caseSearch = '';
+let expCase = {};     // case expand state
+let showClientForm = false;
+let clientForm = {name:'',contact_name:'',contact_email:'',billing_method:'bank',notes:''};
 
 const DEF = {
   pipeline:[
@@ -344,12 +370,141 @@ let D = JSON.parse(JSON.stringify(DEF));
 // GAS & STORAGE
 // ═══════════════════════════════════════════════════════════
 function setDot(s,m){document.getElementById('dot').className='dot'+(s==='ok'?' ok':s==='err'?' err':s==='busy'?' busy':'');document.getElementById('gas-lbl').textContent=m;}
-async function gasGet(p){const r=await fetch(GAS+'?'+new URLSearchParams(p));return r.json();}
-async function gasPost(b){
-  // GASはPOSTのCORSリダイレクトが問題になるためGETパラメータ経由で送信
-  const url=GAS+'?payload='+encodeURIComponent(JSON.stringify(b));
-  const r=await fetch(url);
+
+// タイムアウト付きfetch
+async function fetchWithTimeout(url, options = {}, timeout = 30000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return response;
+  } catch (e) {
+    clearTimeout(id);
+    if (e.name === 'AbortError') throw new Error('タイムアウト(30秒)');
+    throw e;
+  }
+}
+
+async function gasGet(p){
+  if(!GAS) throw new Error('GAS URLが未設定');
+  const url = GAS+'?'+new URLSearchParams(p);
+  console.log('[GAS GET]', url.slice(0,80)+'...');
+  const r = await fetchWithTimeout(url);
+  if(!r.ok) throw new Error('HTTP '+r.status+': '+r.statusText);
   return r.json();
+}
+
+async function gasPost(b){
+  if(!GAS) throw new Error('GAS URLが未設定');
+  console.log('[GAS POST]', JSON.stringify(b).slice(0,80)+'...');
+  const body = JSON.stringify(b);
+
+  // GAS Web App はリダイレクト時に POST→GET 変換されるため、
+  // payload パラメータ経由で doGet に送る（doGet が payload を JSON パースして処理）
+  // ただし URL 長制限があるため、大きいデータは分割が必要
+  const url = GAS + '?payload=' + encodeURIComponent(body);
+
+  if (url.length > 7500) {
+    // URL が長すぎる場合は警告（チャンク分割で対応済みのはずだが念のため）
+    console.warn('gasPost: URL too long (' + url.length + ' chars), data may be truncated');
+  }
+
+  try {
+    const r = await fetchWithTimeout(url);
+    if(!r.ok) throw new Error('HTTP '+r.status+': '+r.statusText);
+    return await r.json();
+  } catch(e) {
+    console.error('gasPost failed:', e);
+    throw e;
+  }
+}
+
+// 接続テスト（詳細診断）
+async function testConnection(){
+  const results = [];
+  const addResult = (name, ok, msg) => results.push({name, ok, msg});
+
+  // 1. URL確認
+  if(!GAS){
+    addResult('GAS URL', false, '未設定');
+    return results;
+  }
+  if(!GAS.includes('script.google.com/macros/s/')){
+    addResult('GAS URL', false, '形式が不正: '+GAS.slice(0,50));
+    return results;
+  }
+  addResult('GAS URL', true, GAS.slice(45,80)+'...');
+
+  // 2. Ping テスト
+  try {
+    const pingUrl = GAS+'?action=ping';
+    console.log('[TEST] Ping:', pingUrl);
+    const r = await fetchWithTimeout(pingUrl, {}, 10000);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const data = await r.json();
+    if(data.status==='ok'){
+      addResult('Ping', true, '応答OK ('+(data.timestamp||'')+')');
+    } else {
+      addResult('Ping', false, data.message||'不明なエラー');
+    }
+  } catch(e) {
+    addResult('Ping', false, e.message);
+  }
+
+  // 3. データ取得テスト
+  try {
+    const r = await gasGet({action:'get_repos'});
+    if(r.status==='ok'){
+      addResult('Repos取得', true, (r.repos||[]).length+'件');
+    } else {
+      addResult('Repos取得', false, r.message||'不明なエラー');
+    }
+  } catch(e) {
+    addResult('Repos取得', false, e.message);
+  }
+
+  // 4. ログ取得テスト
+  try {
+    const r = await gasGet({action:'get_log'});
+    if(r.status==='ok'){
+      const logs = r.logs||[];
+      const last = logs[0];
+      addResult('実行ログ', true, last ? '最終: '+last.action+' ('+last.status+')' : 'ログなし');
+    } else {
+      addResult('実行ログ', false, r.message||'不明なエラー');
+    }
+  } catch(e) {
+    addResult('実行ログ', false, e.message);
+  }
+
+  return results;
+}
+
+// 接続テストUI
+async function runConnectionTest(){
+  setDot('busy','テスト中...');
+  const results = await testConnection();
+  const allOk = results.every(r=>r.ok);
+
+  let msg = '=== GAS接続テスト結果 ===\n\n';
+  for(const r of results){
+    msg += (r.ok?'OK':'NG')+' '+r.name+': '+r.msg+'\n';
+  }
+  msg += '\n';
+  if(allOk){
+    msg += 'すべてのテストに成功しました。';
+    setDot('ok','テスト成功');
+  } else {
+    msg += '一部のテストが失敗しました。\n\n';
+    msg += '【対処法】\n';
+    msg += '1. GAS側で「デプロイ」→「新しいデプロイ」を実行\n';
+    msg += '2. 「ウェブアプリ」を選択\n';
+    msg += '3. 「アクセスできるユーザー」を「全員」に設定\n';
+    msg += '4. 新しいURLをコピーして「リセット」後に入力';
+    setDot('err','テスト失敗');
+  }
+  alert(msg);
 }
 
 function loadLocal(){
@@ -369,17 +524,36 @@ async function saveGAS(){
   saveLocal();
   if(!GAS)return;
   setDot('busy','保存中...');
-  try{
-    const r=await gasPost({key:DK,value:D});
-    if(r.status==='ok'){
-      setDot('ok',`保存済 ${new Date().getHours()}:${String(new Date().getMinutes()).padStart(2,'0')}`);
-    }else{
-      setDot('err',`保存失敗: ${r.message||r.error||'不明なエラー'}`);
-      console.error('saveGAS error response:',r);
+
+  // 分割保存（1キーが失敗しても他は保存できる、URL長制限対策で細かく分割）
+  const chunks = {
+    'main_meta':     {clients: D.clients, mrr: D.mrr, goals: D.goals, nextId: D.nextId},
+    'main_note':     {note: D.note},
+    'main_pipeline': {pipeline: D.pipeline},
+    'main_projects': {projects: D.projects},
+    'main_tasks':    {tasks: D.tasks},
+    'main_ideas':    {ideas: D.ideas},
+    'main_contracts':{contracts: D.contracts},
+    'main_invoices': {invoices: D.invoices}
+  };
+
+  let ok = 0, failed = [];
+  for (const [key, value] of Object.entries(chunks)) {
+    try {
+      const r = await gasPost({key, value});
+      if (r.status === 'ok') ok++;
+      else failed.push(key);
+    } catch (e) {
+      console.error('saveGAS chunk failed:', key, e);
+      failed.push(key);
     }
-  }catch(e){
-    setDot('err',`通信エラー: ${e.message||e}`);
-    console.error('saveGAS exception:',e);
+  }
+
+  if (failed.length === 0) {
+    setDot('ok', '保存済 ' + new Date().toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'}));
+  } else {
+    setDot('err', failed.length + '件失敗: ' + failed.join(','));
+    console.error('saveGAS failed chunks:', failed);
   }
 }
 function scheduleSave(){if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(saveGAS,3000);}
@@ -388,27 +562,69 @@ function manualSave(){saveGAS();}
 async function loadGAS(){
   if(!GAS){loadLocal();render();return;}
   setDot('busy','読込中...');
-  try{
-    const r=await gasGet({key:DK});
-    if(r.status==='ok'&&r.value){
-      D=JSON.parse(r.value);
-      // 新フィールドがない場合のデフォルト追加
-      if(!D.contracts)D.contracts=[];
-      if(!D.invoices)D.invoices=[];
-      if(!D.tasks)D.tasks={};
-      setDot('ok','GAS接続済');
-    }else{
-      loadLocal();
-      setDot('ok','GAS接続済（新規）');
+
+  // 分割キーから並列読み込み（saveGAS と同じキー構成）
+  const keys = ['main_meta', 'main_note', 'main_pipeline', 'main_projects', 'main_tasks', 'main_ideas', 'main_contracts', 'main_invoices'];
+
+  try {
+    // 旧形式（単一キー）も試す（移行期間用）
+    const oldR = await gasGet({key:DK});
+    if(oldR.status==='ok' && oldR.value){
+      try {
+        const oldD = JSON.parse(oldR.value);
+        // 旧データがあれば使用（マイグレーション）
+        D = oldD;
+        console.log('Loaded from legacy single key');
+      } catch(e) {}
     }
-  }catch(e){
+
+    // 新形式（分割キー）を読み込み、上書きマージ
+    const results = await Promise.all(keys.map(key => gasGet({key}).catch(e => ({status:'error'}))));
+
+    let loaded = 0;
+    results.forEach((r, i) => {
+      if(r.status === 'ok' && r.value) {
+        try {
+          const chunk = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
+          Object.assign(D, chunk);
+          loaded++;
+        } catch(e) {
+          console.error('loadGAS parse error:', keys[i], e);
+        }
+      }
+    });
+
+    // 新フィールドがない場合のデフォルト追加
+    if(!D.clients) D.clients = [];
+    if(!D.mrr) D.mrr = [];
+    if(!D.goals) D.goals = {clients:25, mrr:500};
+    if(!D.pipeline) D.pipeline = [];
+    if(!D.projects) D.projects = [];
+    if(!D.tasks) D.tasks = {};
+    if(!D.ideas) D.ideas = [];
+    if(!D.contracts) D.contracts = [];
+    if(!D.invoices) D.invoices = [];
+    if(!D.note) D.note = '';
+    if(!D.nextId) D.nextId = 50;
+
+    if(loaded > 0) {
+      setDot('ok', 'GAS接続済 (' + loaded + 'chunks)');
+    } else {
+      loadLocal();
+      setDot('ok', 'GAS接続済（ローカル）');
+    }
+  } catch(e) {
     loadLocal();
-    setDot('err',`GAS読込エラー: ${e.message||e}`);
-    console.error('loadGAS exception:',e);
+    setDot('err', 'GAS読込エラー: ' + (e.message||e));
+    console.error('loadGAS exception:', e);
   }
+
   render();
   loadSheetRepos();
   loadExecLogs();
+  loadCases();
+  loadClients();
+  checkTriggerStatus();
 }
 
 async function loadSheetRepos(){
@@ -446,6 +662,230 @@ async function loadExecLogs(){
       if(lastRef)lastRefresh=new Date(lastRef.timestamp);
     }
   }catch(e){console.error('loadExecLogs error:',e);}
+}
+
+// トリガー状態変数
+let triggerExists = null;
+
+// トリガー状態チェック
+async function checkTriggerStatus(){
+  if(!GAS)return;
+  try{
+    const r=await gasPost({action:'check_trigger'});
+    if(r.status==='ok'){
+      triggerExists=r.exists===true;
+    }
+  }catch(e){console.error('checkTriggerStatus error:',e);triggerExists=false;}
+}
+
+// 日次トリガー設定
+async function setupDailyTrigger(){
+  if(!GAS){alert('GAS URLが未設定です');return;}
+  if(!confirm('日次トリガー（毎日3:00AM）を設定しますか？'))return;
+  try{
+    setDot('busy','トリガー設定中...');
+    const r=await gasPost({action:'setup_trigger'});
+    if(r.status==='ok'){
+      triggerExists=true;
+      setDot('ok','トリガー設定完了');
+      render();
+    }else{
+      setDot('err',r.message||'設定失敗');
+    }
+  }catch(e){setDot('err','通信エラー');}
+}
+
+// 手動更新実行
+async function triggerRefresh(){
+  if(!GAS){alert('GAS URLが未設定です');return;}
+  if(!confirm('GitHub全リポジトリを手動更新しますか？'))return;
+  try{
+    setDot('busy','更新実行中...');
+    const r=await gasPost({action:'refresh_repos'});
+    if(r.status==='ok'){
+      setDot('ok','更新開始');
+      // 少し待ってログを再読み込み
+      setTimeout(async()=>{
+        await loadExecLogs();
+        await loadSheetRepos();
+        render();
+      },3000);
+    }else{
+      setDot('err',r.message||'更新失敗');
+    }
+  }catch(e){setDot('err','通信エラー');}
+}
+
+// ═══════════════════════════════════════════════════════════
+// 統合パイプラインAPI
+// ═══════════════════════════════════════════════════════════
+
+// cases取得
+async function loadCases(){
+  if(!GAS)return;
+  try{
+    const r=await gasGet({action:'get_cases'});
+    if(r.status==='ok'){
+      cases=r.cases||[];
+      if(tab==='cases')render();
+    }
+  }catch(e){console.error('loadCases error:',e);}
+}
+
+// clients取得
+async function loadClients(){
+  if(!GAS)return;
+  try{
+    const r=await gasGet({action:'get_clients'});
+    if(r.status==='ok'){
+      clients=r.clients||[];
+    }
+  }catch(e){console.error('loadClients error:',e);}
+}
+
+// case作成
+async function createCase(data){
+  if(!GAS){alert('GAS URLを設定してください');return;}
+  setDot('busy','作成中...');
+  try{
+    const r=await gasPost({action:'create_case',...data});
+    if(r.status==='ok'){
+      setDot('ok','作成完了');
+      await loadCases();
+    }else{
+      setDot('err',r.message||'作成失敗');
+    }
+  }catch(e){
+    setDot('err','通信エラー: '+e.message);
+  }
+}
+
+// case更新
+async function updateCaseField(id,field,value){
+  if(!GAS)return;
+  const idx=cases.findIndex(c=>String(c.id)===String(id));
+  if(idx>=0)cases[idx][field]=value;
+  setDot('busy','更新中...');
+  try{
+    const r=await gasPost({action:'update_case',id,[field]:value});
+    setDot(r.status==='ok'?'ok':'err',r.status==='ok'?'更新完了':'更新失敗');
+  }catch(e){
+    setDot('err','通信エラー');
+  }
+}
+
+// stage昇格
+async function promoteCase(id,data={}){
+  if(!GAS){alert('GAS URLを設定してください');return;}
+  const c=cases.find(x=>String(x.id)===String(id));
+  if(!c)return;
+
+  // contract昇格時はクライアント選択が必要
+  if(c.stage==='project'){
+    if(!data.client_id){
+      alert('契約に進むにはクライアントを選択してください');
+      return;
+    }
+    if(!data.monthly_amount){
+      const amt=prompt('月額（円）を入力してください:','0');
+      if(amt===null)return;
+      data.monthly_amount=parseInt(amt)||0;
+    }
+  }
+
+  setDot('busy','昇格中...');
+  try{
+    const r=await gasPost({action:'promote_case',id,data});
+    if(r.status==='ok'){
+      setDot('ok','昇格完了: '+r.newStage);
+      await loadCases();
+    }else{
+      setDot('err',r.message||'昇格失敗');
+      alert(r.message||'昇格に失敗しました');
+    }
+  }catch(e){
+    setDot('err','通信エラー: '+e.message);
+  }
+}
+
+// クライアント作成
+async function createClientFromForm(){
+  if(!GAS){alert('GAS URLを設定してください');return;}
+  if(!clientForm.name.trim()){alert('クライアント名を入力してください');return;}
+  setDot('busy','作成中...');
+  try{
+    const r=await gasPost({action:'create_client',...clientForm});
+    if(r.status==='ok'){
+      setDot('ok','クライアント作成完了');
+      clientForm={name:'',contact_name:'',contact_email:'',billing_method:'bank',notes:''};
+      showClientForm=false;
+      await loadClients();
+      render();
+    }else{
+      setDot('err',r.message||'作成失敗');
+    }
+  }catch(e){
+    setDot('err','通信エラー: '+e.message);
+  }
+}
+
+// repo_ideasからcasesにインポート
+async function importReposToCases(){
+  if(!GAS){alert('GAS URLを設定してください');return;}
+  if(!confirm('repo_ideasシートの全データをcasesシートにインポートします。\n（既存データは保持されます）\n\n実行しますか？'))return;
+  setDot('busy','インポート中...');
+  try{
+    const r=await gasPost({action:'import_repos_to_cases'});
+    if(r.status==='ok'){
+      setDot('ok','インポート完了: '+r.imported+'件');
+      alert('インポート完了: '+r.imported+'件追加されました');
+      await loadCases();
+    }else{
+      setDot('err',r.message||'インポート失敗');
+    }
+  }catch(e){
+    setDot('err','通信エラー: '+e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// トリガー管理
+// ═══════════════════════════════════════════════════════════
+
+let triggerExists = null; // null=未確認, true/false
+
+// トリガー状態確認
+async function checkTriggerStatus(){
+  if(!GAS) return;
+  try {
+    const r = await gasPost({action:'check_trigger'});
+    if(r.status==='ok'){
+      triggerExists = r.exists;
+      console.log('Trigger status:', r.exists ? 'Active ('+r.count+')' : 'Not set');
+    }
+  } catch(e) {
+    console.error('checkTriggerStatus error:', e);
+  }
+}
+
+// トリガー有効化
+async function setupDailyTrigger(){
+  if(!GAS){alert('GAS URLを設定してください');return;}
+  if(!confirm('日次自動更新トリガーを有効化しますか？\n\n毎日午前3時にGitHub APIからpushed_atを再取得します。'))return;
+  setDot('busy','トリガー設定中...');
+  try {
+    const r = await gasPost({action:'setup_trigger'});
+    if(r.status==='ok'){
+      setDot('ok','トリガー設定完了');
+      triggerExists = true;
+      alert('日次トリガーを有効化しました。\n毎日午前3時に自動更新されます。');
+      render();
+    } else {
+      setDot('err',r.message||'設定失敗');
+    }
+  } catch(e) {
+    setDot('err','通信エラー: '+e.message);
+  }
 }
 
 // 手動でGitHub pushed_atを再取得
@@ -492,6 +932,135 @@ async function connectGASSide(){
   }
 }
 
+function resetGASUrl(){
+  if(!confirm('GAS URLをデフォルトにリセットしますか？\n\nデフォルト:\n'+DEFAULT_GAS.slice(0,60)+'...'))return;
+  localStorage.removeItem(GK);
+  GAS=DEFAULT_GAS;
+  localStorage.setItem(GK,DEFAULT_GAS);
+  document.getElementById('gas-url-input').value=DEFAULT_GAS;
+  setDot('busy','再接続中...');
+  loadGAS();
+}
+
+// ═══════════════════════════════════════════════════════════
+// パイプライン昇格（Project → Contract → Invoice）
+// ═══════════════════════════════════════════════════════════
+
+// プロジェクト → 契約化
+function projectToContract(pid){
+  const p = D.projects.find(x => x.id === pid);
+  if (!p) return;
+  if (!confirm('「' + p.name + '」を契約化しますか？')) return;
+  const today = new Date().toISOString().slice(0,10);
+  D.contracts.unshift({
+    id: ++D.nextId,
+    projectId: pid,
+    client: p.client || '',
+    type: '業務委託',
+    startDate: today,
+    endDate: '',
+    amount: p.revAmt || 0,
+    autoRenew: false,
+    terms: '',
+    docUrl: '',
+    memo: 'プロジェクト「' + p.name + '」より昇格',
+    status: 'active'
+  });
+  p.status = 'active';
+  scheduleSave();
+  go('contracts');
+  document.querySelectorAll('.nav').forEach(n => {
+    n.classList.remove('on');
+    if (n.textContent.includes('契約')) n.classList.add('on');
+  });
+}
+
+// 契約 → 請求書発行
+function contractToInvoice(cid){
+  const c = D.contracts.find(x => x.id === cid);
+  if (!c || c.status !== 'active') return;
+  const today = new Date();
+  const thisMonth = today.toISOString().slice(0,7);
+  const exists = D.invoices.find(i =>
+    i.contractId === cid && (i.date || '').startsWith(thisMonth)
+  );
+  if (exists) {
+    alert(thisMonth + ' の請求書は既に発行済みです');
+    return;
+  }
+  const due = new Date(today);
+  due.setMonth(due.getMonth() + 1);
+  // 請求書番号: YYYYMM-NNN
+  const monthInvoices = D.invoices.filter(i => (i.date || '').startsWith(thisMonth));
+  const seq = String(monthInvoices.length + 1).padStart(3, '0');
+  const invoiceNumber = thisMonth.replace('-', '') + '-' + seq;
+  D.invoices.unshift({
+    id: ++D.nextId,
+    contractId: cid,
+    invoiceNumber,
+    client: c.client,
+    date: today.toISOString().slice(0,10),
+    dueDate: due.toISOString().slice(0,10),
+    amount: c.amount,
+    status: 'pending',
+    paidDate: '',
+    memo: c.client + ' ' + thisMonth.slice(5) + '月分'
+  });
+  scheduleSave();
+  go('invoices');
+  document.querySelectorAll('.nav').forEach(n => {
+    n.classList.remove('on');
+    if (n.textContent.includes('請求')) n.classList.add('on');
+  });
+}
+
+// 今月未発行の契約を取得
+function getMissingInvoices(){
+  const thisMonth = new Date().toISOString().slice(0,7);
+  return D.contracts.filter(c => {
+    if (c.status !== 'active') return false;
+    if (!c.amount || c.amount <= 0) return false;
+    return !D.invoices.some(i =>
+      i.contractId === c.id && (i.date || '').startsWith(thisMonth)
+    );
+  });
+}
+
+// 未発行を一括請求
+function bulkCreateInvoices(){
+  const missing = getMissingInvoices();
+  if(!missing.length){
+    alert('今月分の請求書は全て発行済みです');
+    return;
+  }
+  if(!confirm(missing.length + '件の契約に対して今月分の請求書を発行しますか？'))return;
+  const today = new Date();
+  const thisMonth = today.toISOString().slice(0,7);
+  const due = new Date(today);
+  due.setMonth(due.getMonth() + 1);
+  let count = D.invoices.filter(i => (i.date || '').startsWith(thisMonth)).length;
+
+  for(const c of missing){
+    const seq = String(++count).padStart(3, '0');
+    const invoiceNumber = thisMonth.replace('-', '') + '-' + seq;
+    D.invoices.unshift({
+      id: ++D.nextId,
+      contractId: c.id,
+      invoiceNumber,
+      client: c.client,
+      date: today.toISOString().slice(0,10),
+      dueDate: due.toISOString().slice(0,10),
+      amount: c.amount,
+      status: 'pending',
+      paidDate: '',
+      memo: c.client + ' ' + thisMonth.slice(5) + '月分'
+    });
+  }
+  scheduleSave();
+  alert(missing.length + '件の請求書を発行しました');
+  render();
+}
+
 // Auto-save every 60s
 setInterval(saveGAS,60000);
 
@@ -509,9 +1078,15 @@ const STAGES={lead:'リード',approach:'アプローチ',zoom:'Zoom予定',prop
 const SK=Object.keys(STAGES);
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 
-function calcMRR(){return D.clients.reduce((s,c)=>s+(c.fee||0),0);}
+// MRRは契約ベースで計算（万円）
+function calcMRR(){
+  const contractMRR=D.contracts.filter(c=>c.status==='active').reduce((s,c)=>s+(c.amount||0),0);
+  return Math.round(contractMRR/10000); // 円→万円
+}
+// アクティブ契約数
+function countActiveClients(){return D.contracts.filter(c=>c.status==='active').length;}
 function calcCR(){const w=D.pipeline.filter(p=>p.stage==='won').length,t=D.pipeline.filter(p=>['zoom','proposal','won'].includes(p.stage)).length;return t>0?Math.round(w/t*100):null;}
-function pct(){return Math.min(100,Math.round(D.clients.length/D.goals.clients*100));}
+function pct(){return Math.min(100,Math.round(countActiveClients()/D.goals.clients*100));}
 function tago(d){if(d<1)return'今日';if(d<7)return d+'日前';if(d<30)return Math.round(d/7)+'週前';if(d<365)return Math.round(d/30)+'ヶ月前';return Math.round(d/365)+'年前';}
 function h(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function tagP(p){return[
@@ -571,6 +1146,86 @@ function ideaToPJ(i){
   const idea=D.ideas[i];
   D.projects.unshift({id:++D.nextId,name:idea.text,gh:'',user:'self',idea:idea.src,stock:'github',rev:'free',revAmt:0,status:'idea',progress:0,client:'',memo:'アイデアから昇格'});
   D.ideas.splice(i,1);tab='projects';scheduleSave();render();
+}
+
+// Pipeline promotion functions
+function projectToContract(pid){
+  const p=D.projects.find(x=>x.id===pid);
+  if(!p)return;
+  if(!confirm('「'+p.name+'」を契約化しますか？'))return;
+  const today=new Date().toISOString().slice(0,10);
+  D.contracts.unshift({
+    id:++D.nextId,projectId:pid,client:p.client||'',type:'業務委託',
+    startDate:today,endDate:'',amount:p.revAmt||0,autoRenew:false,
+    terms:'',docUrl:'',memo:'プロジェクト「'+p.name+'」より昇格',status:'active'
+  });
+  p.status='active';
+  scheduleSave();
+  tab='contracts';
+  document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));
+  document.querySelectorAll('.nav').forEach(n=>{if(n.textContent.includes('契約'))n.classList.add('on')});
+  render();
+}
+function contractToInvoice(cid){
+  const c=D.contracts.find(x=>x.id===cid);
+  if(!c)return;
+  const today=new Date();
+  const ym=today.toISOString().slice(0,7);
+  // Check if invoice already exists for this month
+  const exists=D.invoices.find(i=>i.contractId===cid&&(i.date||'').startsWith(ym));
+  if(exists){alert('今月分の請求書は既に作成済みです');return;}
+  if(!confirm('「'+c.client+'」の今月分請求書を作成しますか？'))return;
+  const invNum=generateInvoiceNumber();
+  const dueDate=new Date(today.getFullYear(),today.getMonth()+1,today.getDate()).toISOString().slice(0,10);
+  D.invoices.unshift({
+    id:++D.nextId,contractId:cid,client:c.client,invoiceNumber:invNum,
+    date:today.toISOString().slice(0,10),dueDate:dueDate,
+    amount:c.amount||0,status:'pending',paidDate:'',
+    memo:'契約「'+c.client+'」の'+ym+'分'
+  });
+  scheduleSave();
+  tab='invoices';
+  document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));
+  document.querySelectorAll('.nav').forEach(n=>{if(n.textContent.includes('請求'))n.classList.add('on')});
+  render();
+}
+function generateInvoiceNumber(){
+  const now=new Date();
+  const prefix=String(now.getFullYear())+String(now.getMonth()+1).padStart(2,'0');
+  const thisMonth=D.invoices.filter(i=>(i.invoiceNumber||'').startsWith(prefix));
+  const nextNum=thisMonth.length+1;
+  return prefix+'-'+String(nextNum).padStart(3,'0');
+}
+function getMissingInvoices(){
+  const today=new Date();
+  const ym=today.toISOString().slice(0,7);
+  return D.contracts.filter(c=>{
+    if(c.status!=='active')return false;
+    return !D.invoices.find(i=>i.contractId===c.id&&(i.date||'').startsWith(ym));
+  });
+}
+function bulkCreateInvoices(){
+  const missing=getMissingInvoices();
+  if(!missing.length){alert('作成が必要な請求書はありません');return;}
+  if(!confirm(missing.length+'件の今月分請求書を一括作成しますか？'))return;
+  const today=new Date();
+  const dueDate=new Date(today.getFullYear(),today.getMonth()+1,today.getDate()).toISOString().slice(0,10);
+  const ym=today.toISOString().slice(0,7);
+  missing.forEach(c=>{
+    const invNum=generateInvoiceNumber();
+    D.invoices.unshift({
+      id:++D.nextId,contractId:c.id,client:c.client,invoiceNumber:invNum,
+      date:today.toISOString().slice(0,10),dueDate:dueDate,
+      amount:c.amount||0,status:'pending',paidDate:'',
+      memo:'契約「'+c.client+'」の'+ym+'分'
+    });
+  });
+  scheduleSave();
+  alert(missing.length+'件の請求書を作成しました');
+  tab='invoices';
+  document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));
+  document.querySelectorAll('.nav').forEach(n=>{if(n.textContent.includes('請求'))n.classList.add('on')});
+  render();
 }
 
 // GitHub
@@ -662,30 +1317,52 @@ function addGrp(){const n=document.getElementById('ngrp').value.trim();if(!n||gr
 // RENDERERS
 // ═══════════════════════════════════════════════════════════
 function rOverview(){
+  const clientCnt=countActiveClients();
   const mrr=calcMRR(),cr=calcCR(),p=pct();
   const pot=D.pipeline.filter(x=>x.stage!=='won').reduce((s,x)=>s+(x.fee||0),0);
-  const gap={c:Math.max(0,D.goals.clients-D.clients.length),m:Math.max(0,D.goals.mrr-mrr)};
+  const gap={c:Math.max(0,D.goals.clients-clientCnt),m:Math.max(0,D.goals.mrr-mrr)};
   const maxV=Math.max(...D.mrr.map(m=>m.v),mrr,1);
+  // プロジェクト収益MRR（万円）
+  // パイプライン統計
+  const ideaCnt=sheetRepos.filter(r=>r.status==='idea').length;
+  const wipCnt=sheetRepos.filter(r=>r.status==='wip').length + D.projects.filter(p=>p.status==='wip').length;
+  const activePJ=D.projects.filter(pj=>pj.status==='active').length;
+  const activeContracts=D.contracts.filter(c=>c.status==='active').length;
+  const pendingCnt=D.invoices.filter(i=>i.status==='pending').length;
+  const pendingAmt=Math.round(D.invoices.filter(i=>i.status==='pending').reduce((s,i)=>s+(i.amount||0),0)/10000);
+  // 期限超過
+  const today=new Date();
+  const overdueCnt=D.invoices.filter(i=>i.status==='pending'&&i.dueDate&&new Date(i.dueDate)<today).length;
+  // 契約更新間近（30日以内）
+  const soonExpire=D.contracts.filter(c=>{
+    if(c.status!=='active'||!c.endDate)return false;
+    const diff=Math.ceil((new Date(c.endDate)-today)/(1000*60*60*24));
+    return diff>0&&diff<=30;
+  });
+
   return`<div class="phdr"><div><div class="ptitle">ダッシュボード</div><div class="psub">AIの町医者 独立目標管理</div></div></div>
 <div class="stats">
-  <div class="stat"><div class="sv" style="color:var(--green)">${D.clients.length}件</div><div class="sl">確定クライアント</div><div class="ss">目標${D.goals.clients}件</div></div>
-  <div class="stat"><div class="sv" style="color:var(--green)">${mrr}万</div><div class="sl">確定MRR</div><div class="ss">目標${D.goals.mrr}万円</div></div>
-  <div class="stat"><div class="sv" style="color:${cr!==null?'var(--amber)':'var(--text3)'}">${cr!==null?cr+'%':'未計測'}</div><div class="sl">Zoom成約率</div><div class="ss">${D.pipeline.length}件進行中</div></div>
-  <div class="stat"><div class="sv" style="color:var(--blue)">${pot}万</div><div class="sl">潜在パイプラインMRR</div><div class="ss">${D.pipeline.filter(p=>p.stage!=='won').length}件</div></div>
+  <div class="stat"><div class="sv" style="color:var(--purple)">${ideaCnt}</div><div class="sl">アイデア</div><div class="ss">GitHub発掘</div></div>
+  <div class="stat"><div class="sv" style="color:var(--amber)">${wipCnt}</div><div class="sl">開発中</div><div class="ss">Stock+PJ合計</div></div>
+  <div class="stat"><div class="sv" style="color:var(--green)">${activeContracts}</div><div class="sl">有効契約</div><div class="ss">MRR ${mrr}万</div></div>
+  <div class="stat"><div class="sv" style="color:${pendingCnt>0?'var(--amber)':'var(--text3)'}">${pendingCnt}</div><div class="sl">未入金</div><div class="ss">${pendingAmt>0?'¥'+pendingAmt+'万':'—'}</div></div>
 </div>
 <div class="gbar">
-  <div class="gtop"><span>達成度 ${D.clients.length}/${D.goals.clients}件 (${p}%)</span><span>MRR ${mrr}/${D.goals.mrr}万</span></div>
+  <div class="gtop"><span>達成度 ${clientCnt}/${D.goals.clients}件 (${p}%)</span><span>MRR ${mrr}/${D.goals.mrr}万</span></div>
   <div class="barbg"><div class="barfill" style="width:${p}%"></div></div>
   <div class="gnote">あと${gap.c}件・¥${gap.m}万 ${cr?'— '+Math.ceil(gap.c/Math.max(20*0.5*cr/100,.1))+'ヶ月予測':'— 成約率データ待ち'}</div>
 </div>
+<div class="card"><div class="ctitle">📊 データ連携状況</div>
+<div style="font-size:.72rem;color:var(--text2);line-height:1.9">
+<div>・契約: <strong>${D.contracts.filter(c=>c.status==='active').length}</strong>件（アクティブ）→ <button class="btn" style="padding:2px 8px;font-size:.62rem" onclick="tab='contracts';document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));document.querySelectorAll('.nav').forEach(n=>{if(n.textContent.includes('契約'))n.classList.add('on')});render()">契約管理へ</button></div>
+<div>・プロジェクト: <strong>${D.projects.length}</strong>件（稼働${activePJ}件）→ <button class="btn" style="padding:2px 8px;font-size:.62rem" onclick="tab='projects';document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));document.querySelectorAll('.nav').forEach(n=>{if(n.textContent.includes('プロジェクト'))n.classList.add('on')});render()">プロジェクトへ</button></div>
+<div>・請求: <strong>${D.invoices.length}</strong>件（未入金${pendingCnt}件）→ <button class="btn" style="padding:2px 8px;font-size:.62rem" onclick="tab='invoices';document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));document.querySelectorAll('.nav').forEach(n=>{if(n.textContent.includes('請求'))n.classList.add('on')});render()">請求管理へ</button></div>
+<div>・パイプライン: <strong>${D.pipeline.length}</strong>件（潜在${pot}万円）→ <button class="btn" style="padding:2px 8px;font-size:.62rem" onclick="tab='pipeline';document.querySelectorAll('.nav').forEach(n=>n.classList.remove('on'));document.querySelectorAll('.nav').forEach(n=>{if(n.textContent.includes('商談'))n.classList.add('on')});render()">パイプラインへ</button></div>
+</div></div>
+${(()=>{const missing=getMissingInvoices();const noContract=D.projects.filter(p=>p.status==='active'&&!D.contracts.find(c=>c.projectId===p.id));const hasAction=missing.length||noContract.length||overdueCnt||soonExpire.length;return hasAction?`<div class="card" style="border-color:rgba(186,117,23,.4)"><div class="ctitle" style="color:var(--amber)">⚡ 要アクション</div><div style="font-size:.72rem;color:var(--text2);line-height:1.9">${missing.length?`<div style="margin-bottom:8px">・<strong style="color:var(--amber)">${missing.length}件</strong>の契約で今月分請求書が未作成 <button class="btn btn-p" style="padding:2px 10px;font-size:.62rem;margin-left:8px" onclick="bulkCreateInvoices()">一括作成</button></div>`:''}${overdueCnt?`<div style="margin-bottom:8px">・<strong style="color:var(--red)">${overdueCnt}件</strong>の請求書が期限超過 <button class="btn" style="padding:2px 8px;font-size:.62rem;margin-left:8px" onclick="tab='invoices';invFilter='overdue';render()">確認する</button></div>`:''}${soonExpire.length?`<div style="margin-bottom:8px">・<strong style="color:var(--amber)">${soonExpire.length}件</strong>の契約が更新間近（30日以内）<button class="btn" style="padding:2px 8px;font-size:.62rem;margin-left:8px" onclick="tab='contracts';render()">確認する</button></div>`:''}${noContract.length?`<div>・<strong>${noContract.length}件</strong>の稼働中PJで契約未作成: ${noContract.slice(0,3).map(p=>`<span class="tag tg-act" style="font-size:.6rem">${h(p.name)}</span>`).join(' ')}${noContract.length>3?` +${noContract.length-3}件`:''}</div>`:''}</div></div>`:'';})()}
 <div class="card"><div class="ctitle">月次MRR推移</div>
 ${D.mrr.map((m,i)=>`<div class="mrow"><div class="mlbl">${m.m}</div><div class="mbg"><div class="mbar" style="width:${Math.round(m.v/maxV*100)}%;background:${i===D.mrr.length-1?'var(--green)':'rgba(255,255,255,.15)'}"></div></div><input class="minput" type="number" value="${m.v}" oninput="D.mrr[${i}].v=parseFloat(this.value)||0;scheduleSave()">万<button class="btn btn-d" style="padding:1px 5px" onclick="D.mrr.splice(${i},1);scheduleSave();render()">✕</button></div>`).join('')}
-<button class="btn" style="margin-top:5px;font-size:.65rem" onclick="addMo()">+ 月追加</button></div>
-<div class="card"><div class="ctitle">確定クライアント</div>
-<table class="tbl"><thead><tr><th>名前</th><th>業種</th><th style="text-align:right">月額(万)</th><th>開始</th><th>メモ</th><th></th></tr></thead><tbody>
-${D.clients.map((c,i)=>`<tr><td><input value="${h(c.name)}" oninput="D.clients[${i}].name=this.value;scheduleSave()"></td><td><input value="${h(c.type||'')}" oninput="D.clients[${i}].type=this.value"></td><td><input type="number" value="${c.fee||0}" oninput="D.clients[${i}].fee=parseFloat(this.value)||0;scheduleSave()" style="width:55px;text-align:right"></td><td><input value="${h(c.since||'')}" oninput="D.clients[${i}].since=this.value" style="width:65px" placeholder="yyyy-mm"></td><td><input value="${h(c.memo||'')}" oninput="D.clients[${i}].memo=this.value"></td><td><button class="btn btn-d" style="padding:1px 5px" onclick="D.clients.splice(${i},1);scheduleSave();render()">✕</button></td></tr>`).join('')}
-</tbody></table>
-<button class="btn" style="margin-top:5px" onclick="D.clients.push({id:++D.nextId,name:'',type:'',fee:0,since:'',memo:''});render()">+ 追加</button></div>`;
+<button class="btn" style="margin-top:5px;font-size:.65rem" onclick="addMo()">+ 月追加</button></div>`;
 }
 
 function rPipeline(){
@@ -739,7 +1416,7 @@ ${fP.search||fP.user||fP.rev||fP.status?`<button class="chip" onclick="fP={searc
 <div style="grid-column:span 2"><div class="dlbl">メモ</div><textarea oninput="updP(${p.id},'memo',this.value)">${h(p.memo||'')}</textarea></div>
 <div style="grid-column:span 2"><div class="dlbl">タスク <button class="btn" style="padding:1px 6px;font-size:.58rem" onclick="event.stopPropagation();if(!D.tasks[${p.id}])D.tasks[${p.id}]=[];D.tasks[${p.id}].push({id:Date.now(),text:'',done:false,due:''});scheduleSave();render()">+ 追加</button></div>
 <div class="task-list">${(D.tasks[p.id]||[]).map((t,ti)=>`<div class="task-item"><div class="task-chk${t.done?' done':''}" onclick="event.stopPropagation();D.tasks[${p.id}][${ti}].done=!D.tasks[${p.id}][${ti}].done;scheduleSave();render()">${t.done?'✓':''}</div><input class="task-txt${t.done?' done':''}" value="${h(t.text)}" oninput="D.tasks[${p.id}][${ti}].text=this.value;scheduleSave()" placeholder="タスク内容" onclick="event.stopPropagation()"><input type="date" class="task-due" value="${t.due||''}" oninput="D.tasks[${p.id}][${ti}].due=this.value;scheduleSave()" onclick="event.stopPropagation()" style="width:90px"><button class="btn btn-d" style="padding:1px 4px" onclick="event.stopPropagation();D.tasks[${p.id}].splice(${ti},1);scheduleSave();render()">✕</button></div>`).join('')}</div></div>
-<div style="grid-column:span 2"><div class="btn-row">${p.gh&&!p.gh.startsWith('local')?`<a href="https://github.com/${p.gh}" target="_blank" class="btn">GitHub →</a>`:''}<button class="btn btn-d" onclick="if(confirm('削除?'))remP(${p.id})">削除</button></div></div>
+<div style="grid-column:span 2"><div class="btn-row">${p.gh&&!p.gh.startsWith('local')?`<a href="https://github.com/${p.gh}" target="_blank" class="btn">GitHub →</a>`:''}${!D.contracts.find(c=>c.projectId===p.id)?`<button class="btn btn-p" onclick="projectToContract(${p.id})">→ 契約化</button>`:`<span class="tag tg-act">契約済</span>`}<button class="btn btn-d" onclick="if(confirm('削除?'))remP(${p.id})">削除</button></div></div>
 </div></div>`).join('')}</div>`;
 }
 
@@ -871,15 +1548,22 @@ function rIdeas(){
     const daysSince=lastRefresh?Math.floor((new Date()-lastRefresh)/(1000*60*60*24)):null;
     const isStale=daysSince!==null&&daysSince>1;
     const recentLogs=execLogs.slice(0,5);
-    return`<div class="card" style="margin-bottom:1rem;${isStale?'border-color:rgba(186,117,23,.4)':''}">
+    const triggerOk=triggerExists===true;
+    const triggerUnknown=triggerExists===null;
+    return`<div class="card" style="margin-bottom:1rem;${isStale||!triggerOk?'border-color:rgba(186,117,23,.4)':''}">
 <div class="ctitle">🔄 データ同期<span style="font-size:.6rem;color:var(--text3);margin-left:8px">GitHub pushed_at 自動更新</span></div>
-<div style="display:flex;gap:1rem;align-items:center;margin-bottom:8px">
-  <div style="flex:1">
+<div style="display:flex;gap:1rem;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+  <div style="flex:1;min-width:200px">
     <div style="font-size:.72rem;color:var(--text2)">最終更新: <strong style="color:${isStale?'var(--amber)':'var(--green)'}">${lastTime}</strong>${daysSince!==null?` (${daysSince}日前)`:''}</div>
+    <div style="font-size:.72rem;color:var(--text2);margin-top:4px">日次トリガー: ${triggerUnknown?'<span style="color:var(--text3)">確認中...</span>':triggerOk?'<span style="color:var(--green)">有効 ✓</span>':'<span style="color:var(--red)">未設定 ⚠</span>'}</div>
     ${isStale?'<div style="font-size:.65rem;color:var(--amber);margin-top:2px">⚠ 2日以上更新がありません。手動更新を実行してください。</div>':''}
+    ${!triggerOk&&!triggerUnknown?'<div style="font-size:.65rem;color:var(--amber);margin-top:2px">⚠ 日次トリガーが未設定です。設定すると毎日自動更新されます。</div>':''}
   </div>
-  <button class="btn btn-p" onclick="triggerRefresh()" style="white-space:nowrap">🚀 手動更新</button>
-  <button class="btn" onclick="loadExecLogs().then(()=>render())" style="white-space:nowrap">📋 ログ更新</button>
+  <div style="display:flex;gap:4px;flex-wrap:wrap">
+    <button class="btn btn-p" onclick="triggerRefresh()" style="white-space:nowrap">🚀 手動更新</button>
+    ${!triggerOk?`<button class="btn btn-g" onclick="setupDailyTrigger()" style="white-space:nowrap">⏰ 日次有効化</button>`:''}
+    <button class="btn" onclick="loadExecLogs().then(()=>{checkTriggerStatus();render()})" style="white-space:nowrap">📋 ログ更新</button>
+  </div>
 </div>
 ${recentLogs.length?`<div style="font-size:.62rem;color:var(--text3);border-top:1px solid var(--border);padding-top:6px;margin-top:4px">
 <div style="margin-bottom:4px">実行ログ（最新5件）:</div>
@@ -1011,7 +1695,7 @@ ${soonExp.length?`<div class="card" style="border-color:rgba(186,117,23,.3)"><di
   <div><div class="dlbl">契約条件</div><input value="${h(c.terms||'')}" oninput="D.contracts.find(x=>x.id===${c.id}).terms=this.value;scheduleSave()" placeholder="月額固定、成果連動 等"></div>
   <div><div class="dlbl">契約書URL</div><input value="${h(c.docUrl||'')}" oninput="D.contracts.find(x=>x.id===${c.id}).docUrl=this.value;scheduleSave()" placeholder="https://..."></div>
   <div style="grid-column:span 2"><div class="dlbl">メモ</div><textarea oninput="D.contracts.find(x=>x.id===${c.id}).memo=this.value;scheduleSave()">${h(c.memo||'')}</textarea></div>
-  <div style="grid-column:span 2"><div class="btn-row">${c.docUrl?`<a href="${h(c.docUrl)}" target="_blank" class="btn">📄 契約書 →</a>`:''}<button class="btn" onclick="D.contracts.find(x=>x.id===${c.id}).status=D.contracts.find(x=>x.id===${c.id}).status==='active'?'ended':'active';scheduleSave();render()">${c.status==='active'?'終了にする':'有効にする'}</button><button class="btn btn-d" onclick="if(confirm('削除?')){D.contracts=D.contracts.filter(x=>x.id!==${c.id});scheduleSave();render()}">削除</button></div></div>
+  <div style="grid-column:span 2"><div class="btn-row">${c.docUrl?`<a href="${h(c.docUrl)}" target="_blank" class="btn">📄 契約書 →</a>`:''}${c.status==='active'?`<button class="btn btn-p" onclick="contractToInvoice(${c.id})">→ 今月分請求</button>`:''}<button class="btn" onclick="D.contracts.find(x=>x.id===${c.id}).status=D.contracts.find(x=>x.id===${c.id}).status==='active'?'ended':'active';scheduleSave();render()">${c.status==='active'?'終了にする':'有効にする'}</button><button class="btn btn-d" onclick="if(confirm('削除?')){D.contracts=D.contracts.filter(x=>x.id!==${c.id});scheduleSave();render()}">削除</button></div></div>
 </div></div>`;}).join('')}</div>`;
 }
 
@@ -1097,10 +1781,118 @@ function rNote(){
 }
 
 // ═══════════════════════════════════════════════════════════
+// 統合パイプライン（Cases）
+// ═══════════════════════════════════════════════════════════
+function rCases(){
+  const stages=['idea','project','contract','invoice'];
+  const stageNames={idea:'アイデア',project:'プロジェクト',contract:'契約',invoice:'請求'};
+  const stageColors={idea:'var(--purple)',project:'var(--blue)',contract:'var(--green)',invoice:'var(--amber)'};
+  const stageCounts={};
+  stages.forEach(s=>stageCounts[s]=cases.filter(c=>c.stage===s).length);
+
+  // フィルタ適用
+  let filtered=[...cases];
+  if(caseFilter!=='all')filtered=filtered.filter(c=>c.stage===caseFilter);
+  if(caseSearch){
+    const q=caseSearch.toLowerCase();
+    filtered=filtered.filter(c=>
+      String(c.name||'').toLowerCase().includes(q)||
+      String(c.description||'').toLowerCase().includes(q)||
+      String(c.memo||'').toLowerCase().includes(q)
+    );
+  }
+
+  // クライアント選択用
+  const clientOpts=clients.map(c=>`<option value="${c.client_id}">${h(c.name)}</option>`).join('');
+
+  // case カード
+  const caseCard=(c)=>{
+    const id=c.id,isExp=expCase[id];
+    const nextStage=stages[stages.indexOf(c.stage)+1];
+    const client=clients.find(cl=>String(cl.client_id)===String(c.client_id));
+    const pushedDate=c.github_pushed_at?new Date(c.github_pushed_at):null;
+    const daysSince=c.days_since_push||(pushedDate?Math.floor((new Date()-pushedDate)/(1000*60*60*24)):null);
+
+    return`<div class="rcard${isExp?' exp':''}">
+<div class="rtop" onclick="expCase[${id}]=!expCase[${id}];render()">
+<span class="rname">${h(c.name||'無題')}</span>
+<span class="tag" style="background:${stageColors[c.stage]+'20'};color:${stageColors[c.stage]}">${stageNames[c.stage]}</span>
+${c.source==='github'?'<span class="tag tg-gh">GitHub</span>':'<span class="tag tg-lo">手動</span>'}
+${c.language?`<span class="tag tg-lang">${c.language}</span>`:''}
+${daysSince!==null?`<span class="rmeta">${tago(daysSince)}</span>`:''}
+${c.monthly_amount?`<span class="pmrr">¥${(c.monthly_amount/10000).toFixed(1)}万</span>`:''}
+</div>
+${c.description?`<div class="rdesc">${h(c.description)}</div>`:''}
+<div class="rdetail">
+<div><div class="dlbl">名前</div><input value="${h(c.name||'')}" onchange="updateCaseField(${id},'name',this.value)" onclick="event.stopPropagation()"></div>
+<div><div class="dlbl">ソース</div><span style="font-size:.72rem;color:var(--text2)">${c.source==='github'?'GitHub':'手動'}</span></div>
+${c.repo_url?`<div style="grid-column:span 2"><div class="dlbl">リポジトリ</div><a href="${c.repo_url}" target="_blank" class="btn" style="font-size:.65rem" onclick="event.stopPropagation()">GitHub →</a></div>`:''}
+<div style="grid-column:span 2"><div class="dlbl">メモ</div><textarea onclick="event.stopPropagation()" onchange="updateCaseField(${id},'memo',this.value)">${h(c.memo||'')}</textarea></div>
+${c.stage==='contract'||c.stage==='invoice'?`
+<div><div class="dlbl">クライアント</div><span style="font-size:.72rem">${client?h(client.name):'未設定'}</span></div>
+<div><div class="dlbl">月額</div><span style="font-size:.72rem;color:var(--green)">¥${((c.monthly_amount||0)/10000).toFixed(1)}万</span></div>
+<div><div class="dlbl">契約開始</div><span style="font-size:.72rem">${c.contract_start?new Date(c.contract_start).toLocaleDateString('ja-JP'):'-'}</span></div>
+`:''}
+${c.stage==='invoice'?`
+<div><div class="dlbl">請求番号</div><span style="font-size:.72rem;font-family:var(--mono)">${c.invoice_number||'-'}</span></div>
+<div><div class="dlbl">請求状態</div><span class="tag ${c.billing_status==='paid'?'tg-act':c.billing_status==='unbilled'?'tg-wip':'tg-hi'}">${c.billing_status==='paid'?'入金済':c.billing_status==='unbilled'?'未請求':'請求済'}</span></div>
+`:''}
+<div style="grid-column:span 2"><div class="btn-row">
+${nextStage?`<button class="btn btn-p" onclick="event.stopPropagation();${c.stage==='project'?`promoteWithClient(${id})`:`promoteCase(${id})`}">→ ${stageNames[nextStage]}へ昇格</button>`:''}
+${c.stage==='invoice'&&c.billing_status!=='paid'?`<button class="btn btn-g" onclick="event.stopPropagation();updateCaseField(${id},'billing_status','paid');updateCaseField(${id},'paid_date',new Date().toISOString())">💰 入金済にする</button>`:''}
+</div></div>
+</div></div>`;
+  };
+
+  return`<div class="phdr"><div><div class="ptitle">🔗 統合パイプライン</div><div class="psub">アイデア → プロジェクト → 契約 → 請求 を一元管理</div></div>
+<div class="btn-row">
+<button class="btn btn-p" onclick="createCase({stage:'idea',source:'manual',name:'新規アイデア'})">+ 新規アイデア</button>
+<button class="btn" onclick="importReposToCases()">📥 既存リポジトリをインポート</button>
+<button class="btn" onclick="loadCases().then(()=>render())">🔄 再読込</button>
+</div></div>
+<div class="stats">
+${stages.map(s=>`<div class="stat"><div class="sv" style="color:${stageColors[s]}">${stageCounts[s]}</div><div class="sl">${stageNames[s]}</div></div>`).join('')}
+</div>
+<div class="card" style="margin-bottom:1rem">
+<div class="ctitle">📋 クライアントマスタ <span style="font-size:.65rem;color:var(--text3)">(${clients.length}件)</span>
+<button class="btn" style="margin-left:auto;font-size:.62rem" onclick="showClientForm=!showClientForm;render()">+ 新規</button>
+</div>
+${showClientForm?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;padding:8px;background:var(--bg3);border-radius:var(--r)">
+<div><div class="dlbl">会社名 *</div><input value="${h(clientForm.name)}" oninput="clientForm.name=this.value" placeholder="株式会社〇〇"></div>
+<div><div class="dlbl">担当者</div><input value="${h(clientForm.contact_name)}" oninput="clientForm.contact_name=this.value"></div>
+<div><div class="dlbl">メール</div><input value="${h(clientForm.contact_email)}" oninput="clientForm.contact_email=this.value"></div>
+<div><div class="dlbl">支払方法</div><select oninput="clientForm.billing_method=this.value"><option value="bank"${clientForm.billing_method==='bank'?' selected':''}>銀行振込</option><option value="card"${clientForm.billing_method==='card'?' selected':''}>カード</option><option value="invoice"${clientForm.billing_method==='invoice'?' selected':''}>請求書払い</option></select></div>
+<div style="grid-column:span 2"><div class="btn-row"><button class="btn btn-g" onclick="createClientFromForm()">作成</button><button class="btn" onclick="showClientForm=false;render()">キャンセル</button></div></div>
+</div>`:''}
+<div style="font-size:.72rem;color:var(--text2);margin-top:8px">${clients.length?clients.map(c=>`<span class="tag" style="margin:2px">${h(c.name)}</span>`).join(''):'クライアントがありません'}</div>
+</div>
+<div class="fbar">
+<input type="text" placeholder="🔍 検索..." value="${h(caseSearch)}" oninput="caseSearch=this.value;render()">
+<button class="chip${caseFilter==='all'?' on':''}" onclick="caseFilter='all';render()">すべて</button>
+${stages.map(s=>`<button class="chip${caseFilter===s?' on':''}" onclick="caseFilter='${s}';render()">${stageNames[s]}</button>`).join('')}
+</div>
+<div class="stxt">${filtered.length}件 / 全${cases.length}件</div>
+<div class="rlist">${filtered.length?filtered.map(caseCard).join(''):'<div style="padding:2rem;text-align:center;color:var(--text3)">案件がありません</div>'}</div>`;
+}
+
+// project→contract昇格時のクライアント選択ダイアログ
+function promoteWithClient(id){
+  if(!clients.length){
+    alert('先にクライアントを登録してください');
+    return;
+  }
+  const clientId=prompt('クライアントIDを入力してください:\\n'+clients.map(c=>c.client_id+': '+c.name).join('\\n'));
+  if(!clientId)return;
+  const amount=prompt('月額（円）を入力してください:','0');
+  if(amount===null)return;
+  promoteCase(id,{client_id:parseInt(clientId),monthly_amount:parseInt(amount)||0});
+}
+
+// ═══════════════════════════════════════════════════════════
 // MAIN RENDER
 // ═══════════════════════════════════════════════════════════
 function render(){
-  const map={overview:rOverview,pipeline:rPipeline,projects:rProjects,contracts:rContracts,revenue:rRevenue,invoices:rInvoices,github:rGitHub,ideas:rIdeas,note:rNote};
+  const map={overview:rOverview,pipeline:rPipeline,projects:rProjects,contracts:rContracts,revenue:rRevenue,invoices:rInvoices,github:rGitHub,ideas:rIdeas,note:rNote,cases:rCases};
   document.getElementById('main').innerHTML=(map[tab]||rOverview)();
 }
 function go(t,el){
