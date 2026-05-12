@@ -808,9 +808,9 @@ function rIdeas(){
   const sec=(lbl,list,col)=>list.length===0?'':
     `<div class="stxt" style="color:${col};margin:10px 0 5px">${lbl}（${list.length}）</div>${list.map(idea=>{const gi=dIdeas.indexOf(idea);return`<div class="idearow"><span class="tag${idea.src==='client'?' tg-u':' tg-idea'}">${idea.src==='client'?'顧客発':'自発'}</span><div class="ideatxt"><input value="${h(idea.text)}" oninput="D.ideas[${gi}].text=this.value;scheduleSave()"></div><select onchange="D.ideas[${gi}].priority=this.value;scheduleSave();render()"><option value="high"${idea.priority==='high'?' selected':''}>高</option><option value="mid"${idea.priority==='mid'?' selected':''}>中</option><option value="low"${idea.priority==='low'?' selected':''}>低</option></select><button class="btn" style="padding:2px 6px;font-size:.62rem" onclick="ideaToPJ(${gi})">→PJ化</button><button class="btn btn-d" style="padding:2px 5px" onclick="D.ideas.splice(${gi},1);scheduleSave();render()">✕</button></div>`;}).join('')}`;
 
-  // Sheet repos - 更新日順にソート（新しいものから）
+  // Sheet repos - 登録順（新しいものから）- IDが大きいほど新しい
   let slist=[...allRep];
-  slist.sort((a,b)=>new Date(b.pushed_at||b.updated_at||0)-new Date(a.pushed_at||a.updated_at||0));
+  slist.sort((a,b)=>(b.id||0)-(a.id||0));
   if(sSearch){const q=sSearch.toLowerCase();slist=slist.filter(r=>(r.repo_name||'').toLowerCase().includes(q)||(r.description||'').toLowerCase().includes(q)||(r.memo||'').toLowerCase().includes(q));}
   if(sFilter==='high')slist=slist.filter(r=>r.priority==='high');
   if(sFilter==='active')slist=slist.filter(r=>r.status==='active');
@@ -819,7 +819,7 @@ function rIdeas(){
   return`<div class="phdr"><div><div class="ptitle">アイデアストック</div><div class="psub">手動アイデア + GitHub発掘リポジトリ</div></div><div class="btn-row"><button class="btn btn-p" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'self',priority:'high'});render()">+ 自発</button><button class="btn" onclick="D.ideas.unshift({id:++D.nextId,text:'',src:'client',priority:'high'});render()">+ 顧客発</button></div></div>
 ${sec('🔴 優先度高',hi,'var(--red)')}${sec('🟡 優先度中',mi,'var(--amber)')}${sec('⬜ 優先度低',lo,'var(--text3)')}
 ${allRep.length>0?`<div style="margin:1.25rem 0 .75rem;border-top:1px solid var(--border);padding-top:1rem">
-<div class="ctitle" style="margin-bottom:.75rem">📊 GitHubストック<span style="font-size:.6rem;color:var(--text3);margin-left:6px">${slist.length}/${allRep.length}件（更新日順）</span></div>
+<div class="ctitle" style="margin-bottom:.75rem">📊 GitHubストック<span style="font-size:.6rem;color:var(--text3);margin-left:6px">${slist.length}/${allRep.length}件（登録順）</span></div>
 <div class="fbar">
 <input type="text" placeholder="🔍 検索..." value="${h(sSearch)}" oninput="sSearch=this.value;render()">
 <button class="chip${sFilter==='all'?' on':''}" onclick="sFilter='all';render()">すべて</button>
@@ -837,15 +837,16 @@ function stockCard(r){
   const sm={active:'稼働中',wip:'開発中',idea:'アイデア',done:'完了'};
   const sc={active:'tg-act',wip:'tg-wip',idea:'tg-idea',done:'tg-arch'};
   const pc={high:'tg-hi',mid:'tg-mid',low:'tg-lo2'};
-  const updDate=r.pushed_at||r.updated_at;
-  const updStr=updDate?new Date(updDate).toLocaleDateString('ja-JP'):'—';
+  // added_atがあれば使う、なけれ���表示しない
+  const addedDate=r.added_at||r.created_at;
+  const dateStr=addedDate?new Date(addedDate).toLocaleDateString('ja-JP'):'';
   return`<div class="rcard${isExp?' exp':''}">
 <div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}];render()">
-<span class="rname">${h(r.repo_name||'—')}</span>
+<span class="rname">${h(r.repo_name||r.name||'—')}</span>
 ${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
-<span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status}</span>
+<span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status||'アイデア'}</span>
 <span class="tag ${pc[r.priority]||'tg-lo2'}">${r.priority==='high'?'高':r.priority==='mid'?'中':'低'}</span>
-<span class="rmeta">${updStr}</span>
+${dateStr?`<span class="rmeta">${dateStr}</span>`:''}
 </div>
 ${r.description?`<div class="rdesc">${h(r.description)}</div>`:''}
 <div class="rdetail">
