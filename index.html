@@ -525,24 +525,45 @@ async function saveGAS(){
   if(!GAS)return;
   setDot('busy','保存中...');
 
-  // 分割保存（1キーが失敗しても他は保存できる、URL長制限対策で細かく分割）
+  // 分割保存（URL長制限対策）
+  // projects は大きいので個別に分割
   const chunks = {
     'main_meta':     {clients: D.clients, mrr: D.mrr, goals: D.goals, nextId: D.nextId},
     'main_note':     {note: D.note},
     'main_pipeline': {pipeline: D.pipeline},
-    'main_projects': {projects: D.projects},
     'main_tasks':    {tasks: D.tasks},
     'main_ideas':    {ideas: D.ideas},
     'main_contracts':{contracts: D.contracts},
     'main_invoices': {invoices: D.invoices}
   };
 
+  // projects を個別に分割（1プロジェクトずつ、またはまとめて）
+  const projStr = JSON.stringify(D.projects);
+  console.log('[saveGAS] projects total size:', projStr.length, 'chars');
+
+  if (projStr.length < 5000) {
+    // 小さければまとめて保存
+    chunks['main_projects'] = {projects: D.projects};
+  } else {
+    // 大きい場合は個別に保存
+    D.projects.forEach((p, i) => {
+      chunks['main_proj_' + p.id] = {project: p, _idx: i};
+    });
+    // プロジェクト一覧（IDのみ）も保存
+    chunks['main_projects_index'] = {projectIds: D.projects.map(p => p.id)};
+  }
+
   let ok = 0, failed = [];
   for (const [key, value] of Object.entries(chunks)) {
+    const size = JSON.stringify({key, value}).length;
+    console.log('[saveGAS]', key, 'size:', size);
     try {
       const r = await gasPost({key, value});
       if (r.status === 'ok') ok++;
-      else failed.push(key);
+      else {
+        console.warn('saveGAS chunk response not ok:', key, r);
+        failed.push(key);
+      }
     } catch (e) {
       console.error('saveGAS chunk failed:', key, e);
       failed.push(key);
@@ -563,24 +584,22 @@ async function loadGAS(){
   if(!GAS){loadLocal();render();return;}
   setDot('busy','読込中...');
 
-  // 分割キーから並列読み込み（saveGAS と同じキー構成）
-  const keys = ['main_meta', 'main_note', 'main_pipeline', 'main_projects', 'main_tasks', 'main_ideas', 'main_contracts', 'main_invoices'];
+  // 基本キー（projects以外）
+  const baseKeys = ['main_meta', 'main_note', 'main_pipeline', 'main_tasks', 'main_ideas', 'main_contracts', 'main_invoices'];
 
   try {
-    // 旧形式（単一キー）も試す（移行期間用）
+    // 旧形式（単一��ー）も試す（移���期間用）
     const oldR = await gasGet({key:DK});
     if(oldR.status==='ok' && oldR.value){
       try {
         const oldD = JSON.parse(oldR.value);
-        // 旧データがあれば使用（マイグレーション）
         D = oldD;
         console.log('Loaded from legacy single key');
       } catch(e) {}
     }
 
-    // 新形式（分割キー）を読み込み、上書きマージ
-    const results = await Promise.all(keys.map(key => gasGet({key}).catch(e => ({status:'error'}))));
-
+    // 基本キーを読み込み
+    const results = await Promise.all(baseKeys.map(key => gasGet({key}).catch(e => ({status:'error'}))));
     let loaded = 0;
     results.forEach((r, i) => {
       if(r.status === 'ok' && r.value) {
@@ -589,12 +608,55 @@ async function loadGAS(){
           Object.assign(D, chunk);
           loaded++;
         } catch(e) {
-          console.error('loadGAS parse error:', keys[i], e);
+          console.error('loadGAS parse error:', baseKeys[i], e);
         }
       }
     });
 
-    // 新フィールドがない場合のデフォルト追加
+    // projects: まず一括形式を試す
+    const projR = await gasGet({key: 'main_projects'}).catch(e => ({status:'error'}));
+    if(projR.status === 'ok' && projR.value) {
+      try {
+        const chunk = typeof projR.value === 'string' ? JSON.parse(projR.value) : projR.value;
+        if(chunk.projects) {
+          D.projects = chunk.projects;
+          loaded++;
+          console.log('Loaded projects (single chunk):', D.projects.length);
+        }
+      } catch(e) {}
+    }
+
+    // projects: 分割形式もチェック
+    const idxR = await gasGet({key: 'main_projects_index'}).catch(e => ({status:'error'}));
+    if(idxR.status === 'ok' && idxR.value) {
+      try {
+        const idx = typeof idxR.value === 'string' ? JSON.parse(idxR.value) : idxR.value;
+        if(idx.projectIds && idx.projectIds.length > 0) {
+          // 個別プロジェクトを読み込���
+          const projResults = await Promise.all(
+            idx.projectIds.map(id => gasGet({key: 'main_proj_' + id}).catch(e => ({status:'error'})))
+          );
+          const loadedProjects = [];
+          projResults.forEach((r, i) => {
+            if(r.status === 'ok' && r.value) {
+              try {
+                const chunk = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
+                if(chunk.project) loadedProjects.push(chunk.project);
+              } catch(e) {}
+            }
+          });
+          if(loadedProjects.length > 0) {
+            D.projects = loadedProjects;
+            loaded += loadedProjects.length;
+            console.log('Loaded projects (split):', loadedProjects.length);
+          }
+        }
+      } catch(e) {
+        console.error('loadGAS projects_index error:', e);
+      }
+    }
+
+    // 新フ��ールドがない場合のデフォルト追加
     if(!D.clients) D.clients = [];
     if(!D.mrr) D.mrr = [];
     if(!D.goals) D.goals = {clients:25, mrr:500};
