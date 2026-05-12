@@ -930,7 +930,7 @@ function stockCard(r){
   const daysSince=r.days_since_push||(pushedDate?Math.floor((new Date()-pushedDate)/(1000*60*60*24)):null);
   const dateStr=pushedDate?pushedDate.toLocaleDateString('ja-JP'):(addedDate?addedDate.toLocaleDateString('ja-JP'):'');
   return`<div class="rcard${isExp?' exp':''}">
-<div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}];render()">
+<div class="rtop" onclick="expR['s_${id}']=!expR['s_${id}'];render()">
 <span class="rname">${h(r.repo_name||r.name||'—')}</span>
 ${r.language?`<span class="tag tg-lang">${r.language}</span>`:''}
 <span class="tag ${sc[r.status]||'tg-arch'}">${sm[r.status]||r.status||'アイデア'}</span>
