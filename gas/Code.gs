@@ -15,7 +15,7 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 設定
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const SHEET_NAME_REPOS = 'Repos';
+const SHEET_NAME_REPOS = 'repo_ideas';  // 実際のシート名
 const SHEET_NAME_DATA = 'Data';
 const SHEET_NAME_LOG = 'ExecutionLog';
 const GITHUB_TOKEN = ''; // 任意: ghp_xxxx 形式のトークン（プライベートリポジトリ用）
@@ -92,6 +92,8 @@ function handleRequest(body) {
 
 /**
  * 全リポジトリ取得
+ * シート構造: id, repo_name, description, language, url, homepage, stars, size_kb,
+ *            days_since_push, score, gem_reason, group, priority, status, memo, added_at, updated_at
  */
 function getRepos() {
   try {
@@ -112,11 +114,8 @@ function getRepos() {
         repo[headers[j]] = row[j];
       }
 
-      // days_since_push を動的に計算
-      if (repo.pushed_at) {
-        const pushedDate = new Date(repo.pushed_at);
-        repo.days_since_push = Math.floor((now - pushedDate) / (1000 * 60 * 60 * 24));
-      } else if (repo.updated_at) {
+      // days_since_push を動的に計算（updated_atから）
+      if (repo.updated_at) {
         const updatedDate = new Date(repo.updated_at);
         repo.days_since_push = Math.floor((now - updatedDate) / (1000 * 60 * 60 * 24));
       }
@@ -133,6 +132,8 @@ function getRepos() {
 
 /**
  * リポジトリ追加
+ * 既存シート構造: id, repo_name, description, language, url, homepage, stars, size_kb,
+ *                days_since_push, score, gem_reason, group, priority, status, memo, added_at, updated_at
  */
 function addRepos(repos) {
   if (!repos || !repos.length) {
@@ -147,8 +148,10 @@ function addRepos(repos) {
     // 既存IDを取得
     const existingIds = new Set();
     const data = sheet.getDataRange().getValues();
+    const existingHeaders = data.length > 0 ? data[0] : [];
+
     if (data.length > 1) {
-      const idCol = data[0].indexOf('id');
+      const idCol = existingHeaders.indexOf('id');
       if (idCol >= 0) {
         for (let i = 1; i < data.length; i++) {
           existingIds.add(String(data[i][idCol]));
@@ -156,11 +159,11 @@ function addRepos(repos) {
       }
     }
 
-    // ヘッダー確認・作成
-    const headers = ['id', 'repo_name', 'name', 'description', 'url', 'homepage', 'language',
-                     'stargazers_count', 'forks_count', 'size', 'score', 'isGem', 'gemReason',
-                     'group', 'priority', 'status', 'memo',
-                     'pushed_at', 'added_at', 'updated_at', 'days_since_push'];
+    // 既存のヘッダーを使用（シートが空の場合のみ新規作成）
+    const defaultHeaders = ['id', 'repo_name', 'description', 'language', 'url', 'homepage',
+                            'stars', 'size_kb', 'days_since_push', 'score', 'gem_reason',
+                            'group', 'priority', 'status', 'memo', 'added_at', 'updated_at'];
+    const headers = existingHeaders.length > 0 ? existingHeaders : defaultHeaders;
 
     if (data.length === 0 || data[0].length === 0) {
       sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
@@ -170,12 +173,18 @@ function addRepos(repos) {
     for (const repo of repos) {
       if (existingIds.has(String(repo.id))) continue;
 
+      const pushedAt = repo.pushed_at ? new Date(repo.pushed_at) : null;
+      const daysSince = pushedAt ? Math.floor((now - pushedAt) / (1000 * 60 * 60 * 24)) : '';
+
       const row = headers.map(h => {
         if (h === 'added_at') return now;
-        if (h === 'updated_at') return repo.pushed_at ? new Date(repo.pushed_at) : now;
-        if (h === 'pushed_at') return repo.pushed_at ? new Date(repo.pushed_at) : '';
+        if (h === 'updated_at') return pushedAt || now;
+        if (h === 'days_since_push') return daysSince;
         if (h === 'repo_name') return repo.name || '';
-        if (h === 'days_since_push') return ''; // 動的計算のため空
+        if (h === 'stars') return repo.stargazers_count || 0;
+        if (h === 'size_kb') return repo.size || 0;
+        if (h === 'gem_reason') return repo.gemReason || '';
+        if (h === 'url') return repo.html_url || repo.url || '';
         return repo[h] !== undefined ? repo[h] : '';
       });
 
@@ -285,11 +294,15 @@ function deleteRepo(id) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /**
- * 全リポジトリの pushed_at を GitHub API から再取得
+ * 全リポジトリの updated_at と days_since_push を GitHub API から再取得
  * トリガーで毎日実行する
+ *
+ * シート構造: id, repo_name, description, language, url, homepage, stars, size_kb,
+ *            days_since_push, score, gem_reason, group, priority, status, memo, added_at, updated_at
  */
 function refreshAllRepos() {
   const startTime = new Date();
+  const now = new Date();
   let success = 0;
   let failed = 0;
   let skipped = 0;
@@ -304,14 +317,15 @@ function refreshAllRepos() {
     }
 
     const headers = data[0];
-    const idCol = headers.indexOf('id');
     const repoNameCol = headers.indexOf('repo_name');
     const urlCol = headers.indexOf('url');
-    const pushedAtCol = headers.indexOf('pushed_at');
     const updatedAtCol = headers.indexOf('updated_at');
+    const daysSinceCol = headers.indexOf('days_since_push');
+    const starsCol = headers.indexOf('stars');
+    const sizeCol = headers.indexOf('size_kb');
 
-    if (pushedAtCol < 0) {
-      logExecution('refreshAllRepos', 'error', 'pushed_at column not found');
+    if (updatedAtCol < 0) {
+      logExecution('refreshAllRepos', 'error', 'updated_at column not found');
       return;
     }
 
@@ -337,14 +351,25 @@ function refreshAllRepos() {
 
         if (repoData && repoData.pushed_at) {
           const pushedAt = new Date(repoData.pushed_at);
+          const daysSince = Math.floor((now - pushedAt) / (1000 * 60 * 60 * 24));
           const rowNum = i + 1;
 
-          // pushed_at を更新
-          sheet.getRange(rowNum, pushedAtCol + 1).setValue(pushedAt);
+          // updated_at を GitHub の pushed_at で更新
+          sheet.getRange(rowNum, updatedAtCol + 1).setValue(pushedAt);
 
-          // updated_at も pushed_at と同じに（GitHub基準）
-          if (updatedAtCol >= 0) {
-            sheet.getRange(rowNum, updatedAtCol + 1).setValue(pushedAt);
+          // days_since_push を更新
+          if (daysSinceCol >= 0) {
+            sheet.getRange(rowNum, daysSinceCol + 1).setValue(daysSince);
+          }
+
+          // stars も更新（変わっている可能性）
+          if (starsCol >= 0 && repoData.stargazers_count !== undefined) {
+            sheet.getRange(rowNum, starsCol + 1).setValue(repoData.stargazers_count);
+          }
+
+          // size も更新
+          if (sizeCol >= 0 && repoData.size !== undefined) {
+            sheet.getRange(rowNum, sizeCol + 1).setValue(repoData.size);
           }
 
           success++;
@@ -353,7 +378,7 @@ function refreshAllRepos() {
           errors.push(`${repoName}: No pushed_at in response`);
         }
 
-        // レート制限対策: 少し待つ
+        // レート制限対策: 少し待つ（171件 × 100ms = 約17秒）
         Utilities.sleep(100);
 
       } catch (err) {
