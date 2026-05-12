@@ -349,14 +349,35 @@ async function gasPost(b){
   return r.json();
 }
 
-function loadLocal(){try{const r=localStorage.getItem(LS);if(r)D=JSON.parse(r);}catch(e){}}
+function loadLocal(){
+  try{
+    const r=localStorage.getItem(LS);
+    if(r){
+      D=JSON.parse(r);
+      // 新フィールドがない場合のデフォルト追加
+      if(!D.contracts)D.contracts=[];
+      if(!D.invoices)D.invoices=[];
+      if(!D.tasks)D.tasks={};
+    }
+  }catch(e){console.error('loadLocal error:',e);}
+}
 function saveLocal(){try{localStorage.setItem(LS,JSON.stringify(D));}catch(e){}}
 async function saveGAS(){
   saveLocal();
   if(!GAS)return;
   setDot('busy','保存中...');
-  try{const r=await gasPost({key:DK,value:D});setDot(r.status==='ok'?'ok':'err',r.status==='ok'?`保存済 ${new Date().getHours()}:${String(new Date().getMinutes()).padStart(2,'0')}`:'保存失敗');}
-  catch(e){setDot('err','通信エラー');}
+  try{
+    const r=await gasPost({key:DK,value:D});
+    if(r.status==='ok'){
+      setDot('ok',`保存済 ${new Date().getHours()}:${String(new Date().getMinutes()).padStart(2,'0')}`);
+    }else{
+      setDot('err',`保存失敗: ${r.message||r.error||'不明なエラー'}`);
+      console.error('saveGAS error response:',r);
+    }
+  }catch(e){
+    setDot('err',`通信エラー: ${e.message||e}`);
+    console.error('saveGAS exception:',e);
+  }
 }
 function scheduleSave(){if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(saveGAS,3000);}
 function manualSave(){saveGAS();}
@@ -366,9 +387,22 @@ async function loadGAS(){
   setDot('busy','読込中...');
   try{
     const r=await gasGet({key:DK});
-    if(r.status==='ok'&&r.value){D=JSON.parse(r.value);setDot('ok','GAS接続済');}
-    else{loadLocal();setDot('ok','GAS接続済（新規）');}
-  }catch(e){loadLocal();setDot('err','GASエラー→ローカル');}
+    if(r.status==='ok'&&r.value){
+      D=JSON.parse(r.value);
+      // 新フィールドがない場合のデフォルト追加
+      if(!D.contracts)D.contracts=[];
+      if(!D.invoices)D.invoices=[];
+      if(!D.tasks)D.tasks={};
+      setDot('ok','GAS接続済');
+    }else{
+      loadLocal();
+      setDot('ok','GAS接続済（新規）');
+    }
+  }catch(e){
+    loadLocal();
+    setDot('err',`GAS読込エラー: ${e.message||e}`);
+    console.error('loadGAS exception:',e);
+  }
   render();
   loadSheetRepos();
 }
@@ -384,7 +418,16 @@ async function loadSheetRepos(){
       eg.forEach(g=>{if(!groups.includes(g))groups.push(g);});
       if(tab==='ideas'||tab==='github')render();
     }
-  }catch(e){}
+  }catch(e){console.error('loadSheetRepos error:',e);}
+}
+
+// 軽量GAS書き込み（バックグラウンド）
+async function gasSmallWrite(payload){
+  if(!GAS)return;
+  try{
+    const r=await gasPost(payload);
+    if(r.status!=='ok')console.warn('GAS write warning:',r);
+  }catch(e){console.error('gasSmallWrite error:',e);}
 }
 
 function connectGASSide(){
@@ -988,13 +1031,27 @@ function getThumbUrl(r){
   return b?'https://image.thum.io/get/width/400/crop/280/'+b:'';
 }
 
-// キャッシュ付き画像ロード
+// キャッシュ付き画像ロード（タイムアウト付き）
 function loadThumbImg(img,turl){
   var now=Date.now(), c=tcGet();
-  if(c[turl]&&(now-c[turl].t)<TC_TTL){img.src=c[turl].d;return;}
+  // キャッシュがあれば使う
+  if(c[turl]&&(now-c[turl].t)<TC_TTL){
+    if(c[turl].d==='error'){
+      showThumbError(img);
+    }else{
+      img.src=c[turl].d;
+    }
+    return;
+  }
+  // タイムアウト設定（10秒）
+  var timeout=setTimeout(function(){
+    showThumbError(img);
+    var c2=tcGet();c2[turl]={d:'error',t:now};tcSet(c2);
+  },10000);
   img.src=turl;
   img.crossOrigin='anonymous';
   img.addEventListener('load',function(){
+    clearTimeout(timeout);
     try{
       var cv=document.createElement('canvas');
       cv.width=img.naturalWidth||400;cv.height=img.naturalHeight||280;
@@ -1004,6 +1061,22 @@ function loadThumbImg(img,turl){
       var c2=tcGet();c2[turl]={d:turl,t:now};tcSet(c2);
     }
   },{once:true});
+  img.addEventListener('error',function(){
+    clearTimeout(timeout);
+    showThumbError(img);
+    var c2=tcGet();c2[turl]={d:'error',t:now};tcSet(c2);
+  },{once:true});
+}
+function showThumbError(img){
+  img.style.display='none';
+  var parent=img.parentElement;
+  if(parent&&!parent.querySelector('.thumb-err')){
+    var err=document.createElement('div');
+    err.className='thumb-err';
+    err.style.cssText='position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.55rem;color:var(--text3);text-align:center;padding:4px';
+    err.textContent='プレビュー\\n取得失敗';
+    parent.appendChild(err);
+  }
 }
 
 // サムネイルグリッドをDOMで構築
