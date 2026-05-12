@@ -83,6 +83,10 @@ function handleRequest(body) {
     return refreshAllReposManual();
   }
 
+  if (action === 'sync_repos') {
+    return syncAllReposManual();
+  }
+
   return jsonResponse({ status: 'error', message: 'Unknown action: ' + action });
 }
 
@@ -438,6 +442,153 @@ function fetchGitHubRepo(owner, repo) {
   } else {
     throw new Error(`HTTP ${code}`);
   }
+}
+
+/**
+ * GitHub全リポジトリを取得（ページネーション対応）
+ */
+function fetchAllGitHubRepos(username) {
+  const allRepos = [];
+  let page = 1;
+  const perPage = 100;
+
+  while (true) {
+    const url = `https://api.github.com/users/${username}/repos?per_page=${perPage}&page=${page}&sort=pushed`;
+    const options = {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'AInoMachiisha-Commander'
+      },
+      muteHttpExceptions: true
+    };
+
+    if (GITHUB_TOKEN) {
+      options.headers['Authorization'] = 'Bearer ' + GITHUB_TOKEN;
+    }
+
+    const response = UrlFetchApp.fetch(url, options);
+    const code = response.getResponseCode();
+
+    if (code !== 200) {
+      throw new Error(`GitHub API error: HTTP ${code}`);
+    }
+
+    const repos = JSON.parse(response.getContentText());
+    if (!repos || repos.length === 0) break;
+
+    allRepos.push(...repos);
+    if (repos.length < perPage) break;
+
+    page++;
+    Utilities.sleep(100); // レート制限対策
+  }
+
+  return allRepos;
+}
+
+/**
+ * GitHub全リポジトリをシートに同期（不足分を追加）
+ * 既存データは保持、新規のみ追加
+ */
+function syncAllRepos() {
+  const GITHUB_USERNAME = 'hideo-t'; // ユーザー名
+  const startTime = new Date();
+  const now = new Date();
+
+  try {
+    logExecution('syncAllRepos', 'info', 'Starting sync...');
+
+    // 1. シートの既存IDを取得
+    const sheet = getOrCreateSheet(SHEET_NAME_REPOS);
+    const data = sheet.getDataRange().getValues();
+    const existingIds = new Set();
+
+    if (data.length > 1) {
+      const headers = data[0];
+      const idCol = headers.indexOf('id');
+      if (idCol >= 0) {
+        for (let i = 1; i < data.length; i++) {
+          existingIds.add(String(data[i][idCol]));
+        }
+      }
+    }
+
+    const existingCount = existingIds.size;
+    logExecution('syncAllRepos', 'info', `Existing repos in sheet: ${existingCount}`);
+
+    // 2. GitHubから全リポジトリ取得
+    const allRepos = fetchAllGitHubRepos(GITHUB_USERNAME);
+    logExecution('syncAllRepos', 'info', `GitHub repos fetched: ${allRepos.length}`);
+
+    // 3. 不足分を特定
+    const missingRepos = allRepos.filter(r => !existingIds.has(String(r.id)));
+    logExecution('syncAllRepos', 'info', `Missing repos to add: ${missingRepos.length}`);
+
+    if (missingRepos.length === 0) {
+      logExecution('syncAllRepos', 'success', 'All repos already synced. No new repos to add.');
+      return;
+    }
+
+    // 4. ヘッダー取得
+    const headers = data[0];
+
+    // 5. 不足分を追加
+    let added = 0;
+    for (const repo of missingRepos) {
+      const pushedAt = repo.pushed_at ? new Date(repo.pushed_at) : null;
+      const daysSince = pushedAt ? Math.floor((now - pushedAt) / (1000 * 60 * 60 * 24)) : '';
+
+      // スコア計算（簡易版）
+      let score = 0;
+      if (repo.stargazers_count > 0) score += repo.stargazers_count * 5;
+      if (repo.forks_count > 0) score += repo.forks_count * 3;
+      if (repo.description) score += 15;
+      if (repo.homepage) score += 20;
+      if (repo.size > 100) score += 10;
+      if (repo.size > 1000) score += 15;
+
+      const row = headers.map(h => {
+        if (h === 'id') return repo.id;
+        if (h === 'repo_name') return repo.name || '';
+        if (h === 'description') return repo.description || '';
+        if (h === 'language') return repo.language || '';
+        if (h === 'url') return repo.html_url || '';
+        if (h === 'homepage') return repo.homepage || '';
+        if (h === 'stars') return repo.stargazers_count || 0;
+        if (h === 'size_kb') return repo.size || 0;
+        if (h === 'days_since_push') return daysSince;
+        if (h === 'score') return score;
+        if (h === 'gem_reason') return '';
+        if (h === 'group') return '未分類';
+        if (h === 'priority') return 'mid';
+        if (h === 'status') return 'idea';
+        if (h === 'memo') return '';
+        if (h === 'added_at') return now;
+        if (h === 'updated_at') return pushedAt || now;
+        return '';
+      });
+
+      sheet.appendRow(row);
+      added++;
+    }
+
+    const duration = Math.round((new Date() - startTime) / 1000);
+    const summary = `Added ${added} new repos. Total: ${existingCount + added}. Duration: ${duration}s`;
+    logExecution('syncAllRepos', 'success', summary);
+
+  } catch (err) {
+    logExecution('syncAllRepos', 'error', err.message);
+    throw err;
+  }
+}
+
+/**
+ * 同期を手動実行（Web APIから呼び出し）
+ */
+function syncAllReposManual() {
+  syncAllRepos();
+  return jsonResponse({ status: 'ok', message: 'Sync completed. Check execution log.' });
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
